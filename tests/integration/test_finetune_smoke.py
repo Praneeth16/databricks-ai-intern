@@ -2,7 +2,7 @@
 
 Submits a tiny LoRA fine-tune job through ``databricks_jobs``. Defaults to
 ``kind="serverless"`` because the workspace under test is serverless-only;
-flip ``ML_INTERN_TEST_KIND=script`` + ``ML_INTERN_TEST_HARDWARE=t4-small``
+flip ``DATABRICKS_AI_INTERN_TEST_KIND=script`` + ``DATABRICKS_AI_INTERN_TEST_HARDWARE=t4-small``
 when running against a workspace that allows classic compute.
 
     - Tiny base model (``sshleifer/tiny-gpt2``) — pulled from HF Hub at job time.
@@ -12,7 +12,7 @@ when running against a workspace that allows classic compute.
 
 Auto-skipped without:
     - DATABRICKS_CONFIG_PROFILE / DATABRICKS_HOST
-    - ML_INTERN_RUN_FINETUNE_TEST=1   (opt-in — burns DBUs)
+    - DATABRICKS_AI_INTERN_RUN_FINETUNE_TEST=1   (opt-in — burns DBUs)
 """
 
 from __future__ import annotations
@@ -93,9 +93,9 @@ except NameError:
 def _gate_finetune_test():
     if not os.environ.get("DATABRICKS_CONFIG_PROFILE") and not os.environ.get("DATABRICKS_HOST"):
         pytest.skip("No workspace creds")
-    if os.environ.get("ML_INTERN_RUN_FINETUNE_TEST") != "1":
+    if os.environ.get("DATABRICKS_AI_INTERN_RUN_FINETUNE_TEST") != "1":
         pytest.skip(
-            "Set ML_INTERN_RUN_FINETUNE_TEST=1 to run the live LoRA finetune "
+            "Set DATABRICKS_AI_INTERN_RUN_FINETUNE_TEST=1 to run the live LoRA finetune "
             "(burns ~$0.10 of GPU compute)."
         )
 
@@ -107,10 +107,10 @@ def _testing_settings():
 
     cfg = load_config(os.path.join(os.path.dirname(__file__), "..", "..", "configs", "main_agent_config.json"))
     cfg.databricks.uc_catalog = os.environ.get(
-        "ML_INTERN_TEST_CATALOG", "serverless_lakebase_praneeth_catalog",
+        "DATABRICKS_AI_INTERN_TEST_CATALOG", "serverless_lakebase_praneeth_catalog",
     )
-    cfg.databricks.uc_schema = os.environ.get("ML_INTERN_TEST_SCHEMA", "ml_intern_test")
-    cfg.databricks.uc_volume = os.environ.get("ML_INTERN_TEST_VOLUME", "scratch")
+    cfg.databricks.uc_schema = os.environ.get("DATABRICKS_AI_INTERN_TEST_SCHEMA", "databricks_ai_intern_test")
+    cfg.databricks.uc_volume = os.environ.get("DATABRICKS_AI_INTERN_TEST_VOLUME", "scratch")
     return db_client.resolve_settings(cfg)
 
 
@@ -135,14 +135,14 @@ async def test_lora_finetune_runs_to_completion():
                           is_cancelled=False, _running_job_ids=set()),
     )
 
-    kind = os.environ.get("ML_INTERN_TEST_KIND", "serverless_gpu")
+    kind = os.environ.get("DATABRICKS_AI_INTERN_TEST_KIND", "serverless_gpu")
     args = {
         "operation": "run",
         "kind": kind,
         "script": _TRAIN_SCRIPT,
         "filename": "lora_smoke.py",
         "timeout": "60m",
-        "run_name": f"ml-intern-lora-smoke-{int(time.time())}",
+        "run_name": f"databricks-ai-intern-lora-smoke-{int(time.time())}",
     }
     args["dependencies"] = [
         "torch>=2.4",
@@ -154,7 +154,7 @@ async def test_lora_finetune_runs_to_completion():
         "mlflow>=2.20",
     ]
     if kind == "script":
-        args["hardware_flavor"] = os.environ.get("ML_INTERN_TEST_HARDWARE", "t4-small")
+        args["hardware_flavor"] = os.environ.get("DATABRICKS_AI_INTERN_TEST_HARDWARE", "t4-small")
     print(f"Submitting LoRA smoke run on kind={kind} …")
     result = await tool.execute(args)
 

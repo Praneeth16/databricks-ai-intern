@@ -1,6 +1,6 @@
 """Unit tests for backend/lakebase.py.
 
-Lakebase persistence is best-effort: when ML_INTERN_LAKEBASE_INSTANCE isn't
+Lakebase persistence is best-effort: when DATABRICKS_AI_INTERN_LAKEBASE_INSTANCE isn't
 configured (unit tests, local dev) every helper must no-op silently rather
 than raise.
 """
@@ -47,7 +47,7 @@ def test_helpers_noop_without_pool():
 
 
 def test_init_swallows_pool_construction_failure():
-    cfg = _config(lakebase_instance="ml-intern-state")
+    cfg = _config(lakebase_instance="databricks-ai-intern-state")
     with patch(
         "agent.core.db_client.build_lakebase_conninfo",
         side_effect=RuntimeError("no creds"),

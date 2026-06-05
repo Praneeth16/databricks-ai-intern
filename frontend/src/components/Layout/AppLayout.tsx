@@ -250,7 +250,7 @@ export default function AppLayout() {
             <Box
               component="img"
               src="/logo.svg"
-              alt="ML Intern"
+              alt="Databricks AI Intern"
               sx={{ width: { xs: 22, md: 24 }, height: { xs: 22, md: 24 } }}
             />
             <Typography
@@ -262,7 +262,7 @@ export default function AppLayout() {
                 fontSize: { xs: '0.88rem', md: '0.95rem' },
               }}
             >
-              ML Intern
+              Databricks AI Intern
             </Typography>
           </Box>
 

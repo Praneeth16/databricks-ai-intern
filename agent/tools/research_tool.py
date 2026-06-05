@@ -125,7 +125,7 @@ hf_papers({"operation": "find_datasets", "arxiv_id": "2604.01348"})
 hf_papers({"operation": "find_all_resources", "arxiv_id": "2604.01348"})
 
 # 5. Validate datasets — UC tables ingested from HF go via uc_inspect_dataset
-uc_inspect_dataset({"operation": "describe", "table": "ml_intern.agent.alpaca"})
+uc_inspect_dataset({"operation": "describe", "table": "databricks_ai_intern.agent.alpaca"})
 
 # 6. Now get working code for the training method
 github_find_examples({"repo": "trl", "keyword": "sft"})

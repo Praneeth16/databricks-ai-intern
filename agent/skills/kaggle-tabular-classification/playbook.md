@@ -233,7 +233,7 @@ GBDT blends. Stop when marginal gain < compute cost and say so.
 
 1. `experiment find_similar` → skip if config already tried.
 2. `experiment propose` with `expected_metric` (your LB estimate) before submit.
-3. `mlflow.set_experiment("/Shared/ml-intern/<comp_slug>")` with workspace-dir
+3. `mlflow.set_experiment("/Shared/databricks-ai-intern/<comp_slug>")` with workspace-dir
    collision fallback.
 4. Wrap the script with the stdout-tee prelude so `runs/get-output` carries the tail.
 5. Save submission to `/Volumes/<cat>/<schema>/<vol>/<comp_slug>/submission_iter<N>_<method>.csv`

@@ -8,9 +8,9 @@ To run integration tests::
 
     export DATABRICKS_HOST=https://<your-workspace>.cloud.databricks.com
     export DATABRICKS_TOKEN=dapi...
-    export ML_INTERN_UC_CATALOG=ml_intern        # optional overrides
-    export ML_INTERN_UC_SCHEMA=agent
-    export ML_INTERN_UC_VOLUME=scratch
+    export DATABRICKS_AI_INTERN_UC_CATALOG=databricks_ai_intern        # optional overrides
+    export DATABRICKS_AI_INTERN_UC_SCHEMA=agent
+    export DATABRICKS_AI_INTERN_UC_VOLUME=scratch
     export DATABRICKS_WAREHOUSE_ID=<id>
     uv run pytest tests/integration
 """
@@ -54,7 +54,7 @@ def databricks_settings():
             pass
 
     cfg_path = os.environ.get(
-        "ML_INTERN_CONFIG_PATH",
+        "DATABRICKS_AI_INTERN_CONFIG_PATH",
         os.path.join(
             os.path.dirname(__file__), "..", "..", "configs", "main_agent_config.json",
         ),

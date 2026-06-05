@@ -155,7 +155,7 @@ UC_MODEL_TOOL_SPEC = {
     "name": "uc_model",
     "description": (
         "Manage Unity Catalog registered models. Models are referenced as three-level names "
-        "<catalog>.<schema>.<name> (e.g. ml_intern.agent.llama_sft_v1).\n\n"
+        "<catalog>.<schema>.<name> (e.g. databricks_ai_intern.agent.llama_sft_v1).\n\n"
         "Operations:\n"
         "- list: enumerate models in a schema\n"
         "- inspect: get model metadata + aliases\n"
@@ -203,7 +203,7 @@ async def uc_model_handler(arguments: Dict[str, Any], session: Any = None,
 def _load_default_config():
     from agent.config import load_config
     cfg_path = os.environ.get(
-        "ML_INTERN_CONFIG_PATH",
+        "DATABRICKS_AI_INTERN_CONFIG_PATH",
         os.path.join(os.path.dirname(__file__), "..", "..", "configs", "main_agent_config.json"),
     )
     return load_config(cfg_path)

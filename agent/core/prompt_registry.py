@@ -2,7 +2,7 @@
 
 The agent's system prompt lives in two places:
 
-1. **MLflow Prompt Registry** under ``ml_intern.agent.system_prompt`` —
+1. **MLflow Prompt Registry** under ``databricks_ai_intern.agent.system_prompt`` —
    the source of truth in production. Versions are tied to bundle deploys
    so a rollback is one ``databricks bundle deploy --target prod
    --prompt-version <n>`` away.

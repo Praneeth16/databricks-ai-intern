@@ -152,7 +152,7 @@ UC_DATASET_TOOL_SPEC = {
         "Inspect Unity Catalog tables. Use this BEFORE submitting training jobs to validate "
         "dataset format, columns, and row counts.\n\n"
         "Operations:\n"
-        "- list_tables: enumerate tables in <catalog>.<schema> (defaults to ml_intern.agent)\n"
+        "- list_tables: enumerate tables in <catalog>.<schema> (defaults to databricks_ai_intern.agent)\n"
         "- describe: column types, partitioning, location, properties + row count for a fully-qualified table\n"
         "- sample: SELECT * LIMIT <n> for quick eyeballing\n"
         "- query: arbitrary read-only SELECT (write SQL is rejected).\n\n"
@@ -194,7 +194,7 @@ async def uc_inspect_dataset_handler(arguments: Dict[str, Any], session: Any = N
 def _load_default_config():
     from agent.config import load_config
     cfg_path = os.environ.get(
-        "ML_INTERN_CONFIG_PATH",
+        "DATABRICKS_AI_INTERN_CONFIG_PATH",
         os.path.join(os.path.dirname(__file__), "..", "..", "configs", "main_agent_config.json"),
     )
     return load_config(cfg_path)

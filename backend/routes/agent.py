@@ -529,7 +529,7 @@ async def upload_session_dataset(
                 )
 
         config = load_config(os.environ.get(
-            "ML_INTERN_CONFIG_PATH",
+            "DATABRICKS_AI_INTERN_CONFIG_PATH",
             os.path.join(os.path.dirname(__file__), "..", "..", "configs",
                          "main_agent_config.json"),
         ))

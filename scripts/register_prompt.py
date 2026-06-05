@@ -1,7 +1,7 @@
 """Register the bundled system prompt into MLflow's Prompt Registry.
 
 Run on every bundle deploy (or manually) so production sessions resolve
-``ml_intern.agent.system_prompt`` to the current YAML rather than the local
+``databricks_ai_intern.agent.system_prompt`` to the current YAML rather than the local
 fallback. The agent's prompt loader prefers the registry; this script makes
 sure the registry actually has the latest text.
 
@@ -27,7 +27,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_NAME = "ml_intern.agent.system_prompt"
+_DEFAULT_NAME = "databricks_ai_intern.agent.system_prompt"
 _DEFAULT_FILE = (
     Path(__file__).resolve().parent.parent / "agent" / "prompts" / "system_prompt_v3.yaml"
 )

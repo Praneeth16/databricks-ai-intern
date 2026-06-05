@@ -3,7 +3,7 @@
 Replaces the HF-Space-backed sandbox. Adaptive probe at session start picks
 the cheapest compute the workspace exposes:
 
-    1. Serverless GPU compute        — newest API; gated by ML_INTERN_ALLOW_SERVERLESS_GPU
+    1. Serverless GPU compute        — newest API; gated by DATABRICKS_AI_INTERN_ALLOW_SERVERLESS_GPU
     2. Serverless commands API       — TODO once stable; falls through today
     3. Pool-backed all-purpose cluster (instance_pool_id from settings)
     4. On-demand all-purpose cluster (created with default node + runtime)
@@ -125,7 +125,7 @@ async def probe_compute(
 
     Cascade (cheapest first), each step short-circuits on failure:
 
-      1. Serverless GPU (if ``ML_INTERN_ALLOW_SERVERLESS_GPU=1`` and a
+      1. Serverless GPU (if ``DATABRICKS_AI_INTERN_ALLOW_SERVERLESS_GPU=1`` and a
          serverless-capable cluster surfaces from ``wc.clusters.list``).
       2. Pool-backed (``instance_pool_id`` configured) — fast warm start.
       3. On-demand — slowest, always works if quota permits.
@@ -135,7 +135,7 @@ async def probe_compute(
         HARDWARE_FLAVOR_TO_NODE_TYPE.get(hardware) or settings.default_node_type_id
     )
 
-    if os.environ.get("ML_INTERN_ALLOW_SERVERLESS_GPU") == "1":
+    if os.environ.get("DATABRICKS_AI_INTERN_ALLOW_SERVERLESS_GPU") == "1":
         try:
             log("Probing serverless GPU compute…")
             # Serverless GPU is exposed as a "serverless" cluster type when GA;
@@ -187,12 +187,12 @@ async def _create_cluster(
 ) -> str:
     """Create a single-node all-purpose cluster and wait for RUNNING."""
     body: dict[str, Any] = {
-        "cluster_name": f"ml-intern-sandbox-{uuid.uuid4().hex[:8]}",
+        "cluster_name": f"databricks-ai-intern-sandbox-{uuid.uuid4().hex[:8]}",
         "spark_version": settings.default_runtime_version,
         "num_workers": 0,
         "autotermination_minutes": 30,
         "spark_conf": {"spark.databricks.cluster.profile": "singleNode"},
-        "custom_tags": {"ml_intern_purpose": "sandbox", "hardware": hardware},
+        "custom_tags": {"databricks_ai_intern_purpose": "sandbox", "hardware": hardware},
     }
     if instance_pool_id:
         body["instance_pool_id"] = instance_pool_id
@@ -310,7 +310,7 @@ class DatabricksSandbox:
             compute=compute,
             context_id=context_id,
             user_email=user_email,
-            work_dir=f"/Workspace/Users/{_safe_segment(user_email, 'user')}/ml-intern",
+            work_dir=f"/Workspace/Users/{_safe_segment(user_email, 'user')}/databricks-ai-intern",
         )
 
     @staticmethod

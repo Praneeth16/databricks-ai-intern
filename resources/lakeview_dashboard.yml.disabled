@@ -1,4 +1,4 @@
-# Lakeview dashboard for ml-intern observability.
+# Lakeview dashboard for databricks-ai-intern observability.
 #
 # Sources data from:
 #   - MLflow Tracing spans (system.mlflow.traces) — agent loop turns, tool calls,
@@ -14,10 +14,10 @@
 
 resources:
   dashboards:
-    ml_intern_dashboard:
-      display_name: ml-intern observability
+    databricks_ai_intern_dashboard:
+      display_name: databricks-ai-intern observability
       warehouse_id: ${var.warehouse_id}
-      parent_path: /Shared/ml-intern
+      parent_path: /Shared/databricks-ai-intern
       serialized_dashboard: |
         {
           "datasets": [
@@ -31,7 +31,7 @@ resources:
                 "  approx_percentile(execution_time_ms / 1000.0, 0.5) AS p50_seconds,",
                 "  approx_percentile(execution_time_ms / 1000.0, 0.95) AS p95_seconds",
                 "FROM system.mlflow.traces",
-                "WHERE experiment_name = '/Shared/ml-intern'",
+                "WHERE experiment_name = '/Shared/databricks-ai-intern'",
                 "  AND span_name = 'agent_turn'",
                 "  AND start_time >= current_date() - INTERVAL 30 DAYS",
                 "GROUP BY 1 ORDER BY 1"
@@ -46,7 +46,7 @@ resources:
                 "  attributes:operation::string AS operation,",
                 "  count(*) AS calls",
                 "FROM system.mlflow.traces",
-                "WHERE experiment_name = '/Shared/ml-intern'",
+                "WHERE experiment_name = '/Shared/databricks-ai-intern'",
                 "  AND span_name LIKE 'tool.%'",
                 "  AND start_time >= current_date() - INTERVAL 7 DAYS",
                 "GROUP BY 1, 2 ORDER BY calls DESC LIMIT 50"
@@ -72,7 +72,7 @@ resources:
               "displayName": "Training DBUs by job (last 30d)",
               "queryLines": [
                 "SELECT",
-                "  custom_tags['ml_intern_purpose'] AS purpose,",
+                "  custom_tags['databricks_ai_intern_purpose'] AS purpose,",
                 "  custom_tags['databricks_job_run_id'] AS run_id,",
                 "  sum(usage_quantity) AS dbus,",
                 "  sum(usage_quantity * list_price.pricing.default) AS dollars",
@@ -82,7 +82,7 @@ resources:
                 "  AND usage.usage_date BETWEEN list_price.price_start_time AND coalesce(list_price.price_end_time, current_date())",
                 "WHERE billing_origin_product = 'JOBS'",
                 "  AND usage.usage_date >= current_date() - INTERVAL 30 DAYS",
-                "  AND custom_tags['ml_intern_purpose'] IS NOT NULL",
+                "  AND custom_tags['databricks_ai_intern_purpose'] IS NOT NULL",
                 "GROUP BY 1, 2 ORDER BY dbus DESC LIMIT 50"
               ]
             },
@@ -97,7 +97,7 @@ resources:
                 "  attributes:session_id::string AS session_id,",
                 "  status_message",
                 "FROM system.mlflow.traces",
-                "WHERE experiment_name = '/Shared/ml-intern'",
+                "WHERE experiment_name = '/Shared/databricks-ai-intern'",
                 "  AND span_name LIKE 'tool.%'",
                 "  AND status_code = 'ERROR'",
                 "  AND start_time >= current_timestamp() - INTERVAL 24 HOURS",

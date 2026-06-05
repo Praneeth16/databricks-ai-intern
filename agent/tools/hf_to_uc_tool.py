@@ -111,7 +111,7 @@ class HfToUcTool:
                 revision=revision,
                 token=self.hf_token,
                 allow_patterns=allow_patterns,
-                local_dir=tempfile.mkdtemp(prefix="ml_intern_hf_"),
+                local_dir=tempfile.mkdtemp(prefix="databricks_ai_intern_hf_"),
             )
 
         local_dir = await asyncio.to_thread(_snapshot)
@@ -284,7 +284,7 @@ async def hf_to_uc_handler(arguments: Dict[str, Any], session: Any = None,
 def _load_default_config():
     from agent.config import load_config
     cfg_path = os.environ.get(
-        "ML_INTERN_CONFIG_PATH",
+        "DATABRICKS_AI_INTERN_CONFIG_PATH",
         os.path.join(os.path.dirname(__file__), "..", "..", "configs", "main_agent_config.json"),
     )
     return load_config(cfg_path)

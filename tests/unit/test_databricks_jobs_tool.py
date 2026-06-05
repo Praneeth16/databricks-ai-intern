@@ -27,16 +27,16 @@ def _make_settings(**overrides):
     defaults = dict(
         host="https://ws.cloud.databricks.com",
         warehouse_id="abc123",
-        experiment_path="/Shared/ml-intern",
-        uc_catalog="ml_intern",
+        experiment_path="/Shared/databricks-ai-intern",
+        uc_catalog="databricks_ai_intern",
         uc_schema="agent",
         uc_volume="scratch",
-        secret_scope="ml-intern",
+        secret_scope="databricks-ai-intern",
         lakebase_instance=None,
         instance_pool_id=None,
         default_node_type_id="g5.xlarge",
         default_runtime_version="15.4.x-gpu-ml-scala2.12",
-        prompt_registry_name="ml_intern.agent.system_prompt",
+        prompt_registry_name="databricks_ai_intern.agent.system_prompt",
     )
     defaults.update(overrides)
     return db_client.DatabricksSettings(**defaults)
@@ -63,22 +63,22 @@ def test_filter_agent_env_drops_blocklist():
     out = djt._filter_agent_env({
         "DATABRICKS_TOKEN": "leak",
         "AWS_SECRET_ACCESS_KEY": "leak",
-        "OPENAI_API_KEY": "{{secrets/ml-intern/openai}}",
+        "OPENAI_API_KEY": "{{secrets/databricks-ai-intern/openai}}",
         "PYTHONUNBUFFERED": "1",
     })
     assert "DATABRICKS_TOKEN" not in out
     assert "AWS_SECRET_ACCESS_KEY" not in out
-    assert out["OPENAI_API_KEY"] == "{{secrets/ml-intern/openai}}"
+    assert out["OPENAI_API_KEY"] == "{{secrets/databricks-ai-intern/openai}}"
     assert out["PYTHONUNBUFFERED"] == "1"
 
 
 def test_filter_agent_env_dropped_databricks_prefixed_unless_secret_ref():
     out = djt._filter_agent_env({
         "DATABRICKS_RUNTIME_VERSION": "15.4",  # plaintext DB var → dropped
-        "DATABRICKS_PROFILE": "{{secrets/ml-intern/profile}}",  # ref → kept
+        "DATABRICKS_PROFILE": "{{secrets/databricks-ai-intern/profile}}",  # ref → kept
     })
     assert "DATABRICKS_RUNTIME_VERSION" not in out
-    assert out["DATABRICKS_PROFILE"] == "{{secrets/ml-intern/profile}}"
+    assert out["DATABRICKS_PROFILE"] == "{{secrets/databricks-ai-intern/profile}}"
 
 
 def test_filter_agent_env_handles_none_and_non_string():
@@ -158,7 +158,7 @@ async def test_build_submit_body_serverless_uses_environment_key():
         kind="serverless",
     )
     task = body["tasks"][0]
-    assert task["environment_key"] == "ml_intern_env"
+    assert task["environment_key"] == "databricks_ai_intern_env"
     assert "new_cluster" not in task
     assert body["environments"][0]["spec"]["dependencies"] == ["transformers==4.45.2"]
     assert body["timeout_seconds"] == 3600
@@ -198,7 +198,7 @@ async def test_resolve_or_stage_script_uploads_inline_to_volume():
     # format=AUTO so spark_python_task can ``open()`` them as plain files. The
     # ``files/`` subdir keeps file uploads from colliding with notebook
     # uploads from the serverless_gpu path under the same session id.
-    assert path.startswith("/Workspace/Users/alice@ex.com/ml-intern/")
+    assert path.startswith("/Workspace/Users/alice@ex.com/databricks-ai-intern/")
     assert "/files/" in path
     assert path.endswith("/train.py")
     # Raw API call shape — POST to workspace/import with base64 content.
@@ -227,7 +227,7 @@ async def test_resolve_or_stage_script_notebook_path_uses_notebooks_subdir():
     path = await tool._resolve_or_stage_script(
         {"script": "print('hi')"}, as_notebook=True,
     )
-    assert path.startswith("/Workspace/Users/alice@ex.com/ml-intern/")
+    assert path.startswith("/Workspace/Users/alice@ex.com/databricks-ai-intern/")
     assert "/notebooks/" in path
     assert path.endswith("/train.py")
     posts = [c for c in wc.api_client.do.call_args_list
@@ -258,9 +258,9 @@ async def test_notebook_upload_wraps_user_script_with_stdout_capture():
              if c.args[0] == "POST" and c.args[1] == "/api/2.0/workspace/import"]
     decoded = base64.b64decode(posts[0].kwargs["body"]["content"]).decode()
     assert decoded.startswith("# Databricks notebook source\n")
-    assert "_ML_INTERN_BUF" in decoded
-    assert "_ML_INTERN_TEE" in decoded
-    assert "dbutils.notebook.exit(_ML_INTERN_BUF.getvalue()[-4000:])" in decoded
+    assert "_DATABRICKS_AI_INTERN_BUF" in decoded
+    assert "_DATABRICKS_AI_INTERN_TEE" in decoded
+    assert "dbutils.notebook.exit(_DATABRICKS_AI_INTERN_BUF.getvalue()[-4000:])" in decoded
     # User script is preserved inside the wrapper.
     assert "print('hello')" in decoded
 
@@ -287,7 +287,7 @@ async def test_notebook_upload_preserves_user_explicit_exit():
     # User's exit kept verbatim.
     assert "dbutils.notebook.exit('user-value')" in decoded
     # Wrapper's auto-exit not added when user already exits.
-    assert "_ML_INTERN_BUF.getvalue()[-4000:]" not in decoded
+    assert "_DATABRICKS_AI_INTERN_BUF.getvalue()[-4000:]" not in decoded
 
 
 @pytest.mark.asyncio
@@ -310,12 +310,12 @@ async def test_upload_workspace_file_clears_notebook_at_same_path():
     tool.session.session_id = "s"
 
     await tool._upload_workspace_file(
-        "/Workspace/Users/alice@ex.com/ml-intern/s/files/train.py",
+        "/Workspace/Users/alice@ex.com/databricks-ai-intern/s/files/train.py",
         "print('x')",
     )
     wc.workspace.delete.assert_called_once()
     deleted_path = wc.workspace.delete.call_args.args[0]
-    assert deleted_path == "/Users/alice@ex.com/ml-intern/s/files/train.py"
+    assert deleted_path == "/Users/alice@ex.com/databricks-ai-intern/s/files/train.py"
 
 
 @pytest.mark.asyncio
@@ -336,7 +336,7 @@ async def test_upload_workspace_notebook_clears_file_at_same_path():
     tool.session.session_id = "s"
 
     await tool._upload_workspace_notebook(
-        "/Workspace/Users/alice@ex.com/ml-intern/s/notebooks/train.py",
+        "/Workspace/Users/alice@ex.com/databricks-ai-intern/s/notebooks/train.py",
         "# Databricks notebook source\nprint('x')",
     )
     wc.workspace.delete.assert_called_once()
@@ -360,7 +360,7 @@ async def test_upload_workspace_file_skips_delete_when_type_matches():
     tool.session.session_id = "s"
 
     await tool._upload_workspace_file(
-        "/Workspace/Users/alice@ex.com/ml-intern/s/files/train.py",
+        "/Workspace/Users/alice@ex.com/databricks-ai-intern/s/files/train.py",
         "print('x')",
     )
     wc.workspace.delete.assert_not_called()
@@ -399,7 +399,7 @@ async def test_run_finetune_posts_to_endpoint_and_defaults_register_to():
     tool = djt.DatabricksJobsTool(wc=wc, settings=_make_settings())
     result = await tool._run_finetune({
         "model": "meta-llama/Llama-3.2-1B",
-        "train_data_path": "ml_intern.agent.sft_train",
+        "train_data_path": "databricks_ai_intern.agent.sft_train",
     })
     assert not result.get("isError")
     method, path = wc.api_client.do.call_args[0][:2]
@@ -407,11 +407,11 @@ async def test_run_finetune_posts_to_endpoint_and_defaults_register_to():
     assert path == djt._FINETUNE_API_PATH
     body = wc.api_client.do.call_args[1]["body"]
     assert body["model"] == "meta-llama/Llama-3.2-1B"
-    assert body["train_data_path"] == "ml_intern.agent.sft_train"
+    assert body["train_data_path"] == "databricks_ai_intern.agent.sft_train"
     assert body["task_type"] == "INSTRUCTION_FINETUNE"
     # default register_to lives under the configured catalog.schema
-    assert body["register_to"].startswith("ml_intern.agent.")
-    assert body["experiment_path"] == "/Shared/ml-intern"
+    assert body["register_to"].startswith("databricks_ai_intern.agent.")
+    assert body["experiment_path"] == "/Shared/databricks-ai-intern"
 
 
 @pytest.mark.asyncio
@@ -434,7 +434,7 @@ async def test_ps_renders_table_from_runs_list():
         "runs": [
             {
                 "run_id": 111,
-                "run_name": "ml-intern-1",
+                "run_name": "databricks-ai-intern-1",
                 "state": {"life_cycle_state": "RUNNING", "result_state": ""},
                 "job_id": 42,
             }

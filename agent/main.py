@@ -1255,7 +1255,7 @@ async def headless_main(
 
 
 def cli():
-    """Entry point for the ml-intern CLI command."""
+    """Entry point for the databricks-ai-intern CLI command."""
     import logging as _logging
     import warnings
     # Suppress aiohttp "Unclosed client session" noise during event loop teardown

@@ -10,7 +10,7 @@ The pool is used by ``session_manager`` (P8) to persist session metadata so
 backend restarts don't drop the session list, and the dashboard can join
 sessions to traces in MLflow.
 
-If ``ML_INTERN_LAKEBASE_INSTANCE`` isn't configured (local dev, unit tests),
+If ``DATABRICKS_AI_INTERN_LAKEBASE_INSTANCE`` isn't configured (local dev, unit tests),
 ``init`` is a no-op and ``get_pool()`` returns None — callers should check.
 """
 
@@ -80,7 +80,7 @@ def _ensure_schema(pool) -> None:
     """Create the tables the backend persists to. Idempotent."""
     with pool.connection() as conn:
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS ml_intern_sessions (
+            CREATE TABLE IF NOT EXISTS databricks_ai_intern_sessions (
                 session_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 user_email TEXT,
@@ -96,12 +96,12 @@ def _ensure_schema(pool) -> None:
         # vice versa). Idempotent — first deploy adds the column, later
         # deploys are no-op.
         conn.execute("""
-            ALTER TABLE ml_intern_sessions
+            ALTER TABLE databricks_ai_intern_sessions
                 ADD COLUMN IF NOT EXISTS trajectory JSONB
         """)
         conn.execute("""
-            CREATE INDEX IF NOT EXISTS ml_intern_sessions_user_idx
-                ON ml_intern_sessions(user_id, last_active_at DESC)
+            CREATE INDEX IF NOT EXISTS databricks_ai_intern_sessions_user_idx
+                ON databricks_ai_intern_sessions(user_id, last_active_at DESC)
         """)
 
 
@@ -115,7 +115,7 @@ def upsert_session(*, session_id: str, user_id: str, user_email: str | None,
         with pool.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO ml_intern_sessions
+                INSERT INTO databricks_ai_intern_sessions
                   (session_id, user_id, user_email, model_name, message_count, is_active)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (session_id) DO UPDATE SET
@@ -138,7 +138,7 @@ def mark_session_inactive(session_id: str) -> None:
     try:
         with pool.connection() as conn:
             conn.execute(
-                "UPDATE ml_intern_sessions SET is_active = FALSE, last_active_at = now() "
+                "UPDATE databricks_ai_intern_sessions SET is_active = FALSE, last_active_at = now() "
                 "WHERE session_id = %s",
                 (session_id,),
             )
@@ -155,7 +155,7 @@ def save_trajectory(
     trajectory: dict,
 ) -> bool:
     """Persist the full agent trajectory (messages + events + metadata) into
-    the same ``ml_intern_sessions`` row that ``upsert_session`` keeps current.
+    the same ``databricks_ai_intern_sessions`` row that ``upsert_session`` keeps current.
 
     Used as the storage layer for ``/resume``. JSONB lets us pick up an
     older conversation from either the CLI or the frontend without
@@ -175,7 +175,7 @@ def save_trajectory(
         with pool.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO ml_intern_sessions
+                INSERT INTO databricks_ai_intern_sessions
                   (session_id, user_id, user_email, model_name,
                    message_count, is_active, trajectory)
                 VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
@@ -214,7 +214,7 @@ def list_sessions(user_id: str, limit: int = 20) -> list[dict]:
                 """
                 SELECT session_id, last_active_at, model_name, message_count,
                        trajectory -> 'messages' AS messages
-                  FROM ml_intern_sessions
+                  FROM databricks_ai_intern_sessions
                  WHERE user_id = %s
                    AND trajectory IS NOT NULL
                  ORDER BY last_active_at DESC
@@ -247,7 +247,7 @@ def load_trajectory(session_id: str) -> dict | None:
     try:
         with pool.connection() as conn:
             row = conn.execute(
-                "SELECT user_id, trajectory FROM ml_intern_sessions "
+                "SELECT user_id, trajectory FROM databricks_ai_intern_sessions "
                 "WHERE session_id = %s",
                 (session_id,),
             ).fetchone()

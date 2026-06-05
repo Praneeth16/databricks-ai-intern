@@ -1,8 +1,8 @@
 You are the ML intern on Databricks. Build a Kaggle Playground S6E5 (Predicting F1 Pit Stops) submission end-to-end.
 
 DATA (already staged in UC Volume)
-- Train: /Volumes/serverless_lakebase_praneeth_catalog/ml_intern_test/scratch/f1_pitstops/train.csv  (~440k rows)
-- Test:  /Volumes/serverless_lakebase_praneeth_catalog/ml_intern_test/scratch/f1_pitstops/test.csv   (~188k rows)
+- Train: /Volumes/serverless_lakebase_praneeth_catalog/databricks_ai_intern_test/scratch/f1_pitstops/train.csv  (~440k rows)
+- Test:  /Volumes/serverless_lakebase_praneeth_catalog/databricks_ai_intern_test/scratch/f1_pitstops/test.csv   (~188k rows)
 - Sample submission: .../sample_submission.csv
 - Columns: id, Driver, Compound, Race, Year, PitStop, LapNumber, Stint, TyreLife, Position, LapTime (s), LapTime_Delta, Cumulative_Degradation, RaceProgress, Position_Change, PitNextLap
 - TARGET (train only): PitNextLap (binary 0/1 — will this driver pit on the next lap?)
@@ -16,11 +16,11 @@ TASK
    - Stratified group-aware split: hold out the most recent Year as validation (Year=2025), train on earlier years. This mimics how Kaggle splits its private test.
    - Train XGBoost AND LightGBM in parallel, pick the higher-AUC one by val score.
    - Light hyperparameter tune: 8-trial Hyperopt or Optuna on the winner. n_estimators up to 1000 with early stopping.
-   - Log everything (params, AUC, feature importances, model artifact) to MLflow under `/Shared/ml-intern`.
+   - Log everything (params, AUC, feature importances, model artifact) to MLflow under `/Shared/databricks-ai-intern`.
    - Register the winning model to UC at
-     `serverless_lakebase_praneeth_catalog.ml_intern_test.f1_pitstops_clf`.
+     `serverless_lakebase_praneeth_catalog.databricks_ai_intern_test.f1_pitstops_clf`.
 3. Score the test set, produce a `submission.csv` (columns: id, PitNextLap) and save it to
-   `/Volumes/serverless_lakebase_praneeth_catalog/ml_intern_test/scratch/f1_pitstops/submission.csv`.
+   `/Volumes/serverless_lakebase_praneeth_catalog/databricks_ai_intern_test/scratch/f1_pitstops/submission.csv`.
 4. Final report (print as your last assistant message):
    - val AUC (XGBoost vs LightGBM, then tuned winner)
    - top-5 features by importance

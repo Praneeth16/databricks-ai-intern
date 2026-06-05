@@ -9,7 +9,7 @@
 -- file is the documented source of truth — keep the two in sync.
 --
 -- Replace {{catalog}}.{{schema}} with the configured UC binding
--- (defaults: ml_intern.agent). The DAO resolves it as
+-- (defaults: databricks_ai_intern.agent). The DAO resolves it as
 -- {settings.uc_catalog}.{settings.uc_schema}.experiments.
 
 CREATE TABLE IF NOT EXISTS {{catalog}}.{{schema}}.experiments (

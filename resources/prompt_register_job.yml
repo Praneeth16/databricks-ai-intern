@@ -1,7 +1,7 @@
 # One-shot job that registers the bundled system prompt into the MLflow
 # Prompt Registry. Triggered manually after every bundle deploy:
 #
-#     databricks bundle run ml_intern_register_prompt --target <env>
+#     databricks bundle run databricks_ai_intern_register_prompt --target <env>
 #
 # The agent's prompt loader (agent/core/prompt_registry.py) prefers the
 # registry over the bundled YAML, so production sessions pick up the new
@@ -9,10 +9,10 @@
 
 resources:
   jobs:
-    ml_intern_register_prompt:
-      name: ml-intern-register-prompt
+    databricks_ai_intern_register_prompt:
+      name: databricks-ai-intern-register-prompt
       tags:
-        ml_intern_purpose: prompt-bootstrap
+        databricks_ai_intern_purpose: prompt-bootstrap
       tasks:
         - task_key: register
           spark_python_task:

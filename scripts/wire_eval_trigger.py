@@ -1,16 +1,16 @@
-"""Bind the ml-intern-eval job to a UC registered-model trigger.
+"""Bind the databricks-ai-intern-eval job to a UC registered-model trigger.
 
 Asset Bundles can't yet declare an MLflow Deployment Job trigger inline, so
 this one-shot script does it via the MLflow API after every bundle deploy.
 
 The trigger pattern matches all models registered under the configured UC
-catalog/schema (``ml_intern.agent.*`` by default), so any finetune that
+catalog/schema (``databricks_ai_intern.agent.*`` by default), so any finetune that
 lands a new version automatically kicks off scripts/eval_model.py.
 
 Usage::
 
     python scripts/wire_eval_trigger.py --job-id <id from bundle deploy> \\
-                                        --catalog ml_intern --schema agent
+                                        --catalog databricks_ai_intern --schema agent
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-id", required=True)
-    parser.add_argument("--catalog", default="ml_intern")
+    parser.add_argument("--catalog", default="databricks_ai_intern")
     parser.add_argument("--schema", default="agent")
     args = parser.parse_args()
 

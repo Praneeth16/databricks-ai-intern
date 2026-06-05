@@ -1,5 +1,5 @@
 # Auto-evaluation job triggered when a new model version lands in
-# ml_intern.agent.<name>. Uses MLflow Deployment Jobs (workflow trigger
+# databricks_ai_intern.agent.<name>. Uses MLflow Deployment Jobs (workflow trigger
 # pattern: register-model → fan out to evaluator → write score back as a
 # tag on the model version).
 #
@@ -9,10 +9,10 @@
 
 resources:
   jobs:
-    ml_intern_eval:
-      name: ml-intern-eval
+    databricks_ai_intern_eval:
+      name: databricks-ai-intern-eval
       tags:
-        ml_intern_purpose: model-eval
+        databricks_ai_intern_purpose: model-eval
       tasks:
         - task_key: evaluate
           spark_python_task:
@@ -31,7 +31,7 @@ resources:
               - mlflow[databricks]>=2.21
       parameters:
         - name: model
-          default: ml_intern.agent.placeholder
+          default: databricks_ai_intern.agent.placeholder
         - name: version
           default: "1"
       # MLflow Deployment Job triggers (fire on every new UC model version)

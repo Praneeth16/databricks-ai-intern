@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="frontend/public/logo.svg" alt="ML Intern logo" width="120" />
+  <img src="frontend/public/logo.svg" alt="Databricks AI Intern logo" width="120" />
 </p>
 
-<h1 align="center">ML Intern · Databricks</h1>
+<h1 align="center">Databricks AI Intern</h1>
 
 <p align="center">
   <em>An autonomous ML engineer that reads the literature, ingests Unity Catalog
@@ -12,7 +12,7 @@
 
 ---
 
-ML Intern is an agentic ML engineer. Give it a goal — *"fine-tune Llama on this
+Databricks AI Intern is an agentic ML engineer. Give it a goal — *"fine-tune Llama on this
 UC table"*, *"get me a top-decile model on this Kaggle dataset"*, *"read the
 latest papers on X and try the most promising idea"* — and it runs the full loop:
 research → hypothesize → train → measure → reproduce-gate → iterate, all inside
@@ -36,11 +36,11 @@ equivalent. There is no HF fallback — Databricks is the only supported backend
 | **Secrets** | Databricks Secrets scopes; jobs use `{{secrets/scope/key}}` dynamic refs. |
 | **Sandbox** | Serverless GPU → serverless compute → pool-backed cluster → on-demand (adaptive probe). |
 | **Deploy** | Databricks Asset Bundles (`databricks.yml` + `resources/*.yml`). |
-| **Prompts** | MLflow Prompt Registry (`ml_intern.agent.system_prompt`), YAML fallback. |
+| **Prompts** | MLflow Prompt Registry (`databricks_ai_intern.agent.system_prompt`), YAML fallback. |
 
 ## What makes it an ML *researcher*, not just an ML *engineer*
 
-Beyond one-shot training, ML Intern closes a measurable, self-iterating loop:
+Beyond one-shot training, Databricks AI Intern closes a measurable, self-iterating loop:
 
 - **Experiment ledger** (`agent/core/experiment_ledger.py`) — every run persisted
   to a UC Delta table (JSONL fallback), with config, metric, and reproduce status.
@@ -114,7 +114,7 @@ cd frontend && npm install && npm run dev   # Vite/React on :5173
 export DATABRICKS_HOST=https://<your-workspace>.cloud.databricks.com
 databricks bundle validate
 databricks bundle deploy --target dev      # or prod
-databricks bundle run ml_intern            # open the App
+databricks bundle run databricks_ai_intern            # open the App
 ```
 
 ## Architecture
@@ -311,11 +311,11 @@ Integration tests are gated on `DATABRICKS_HOST` and skip cleanly without it.
 
 ## Citation
 
-If you use ML Intern in your work, please cite it:
+If you use Databricks AI Intern in your work, please cite it:
 
 ```bibtex
-@software{databricks_ml_intern,
-  title  = {ML Intern: An Autonomous ML Engineer on the Databricks AI Runtime},
+@software{databricks_ai_intern,
+  title  = {Databricks AI Intern: An Autonomous ML Engineer on the Databricks AI Runtime},
   author = {Paikray, Praneeth},
   year   = {2026},
   url    = {https://github.com/Praneeth16/databricks-ai-intern}

@@ -15,7 +15,7 @@ bundle:
 variables:
   uc_catalog:
     description: Unity Catalog for agent artifacts + telemetry
-    default: ml_intern
+    default: databricks_ai_intern
   uc_schema:
     description: Schema under the catalog
     default: agent
@@ -24,12 +24,12 @@ variables:
     default: scratch
   secret_scope:
     description: Secret scope name
-    default: ml-intern
+    default: databricks-ai-intern
   warehouse_id:
     description: Existing serverless SQL warehouse ID
   lakebase_instance:
     description: Lakebase instance name for session state
-    default: ml-intern-state
+    default: databricks-ai-intern-state
   instance_pool_id:
     description: Warm instance pool ID for sandbox clusters (optional)
     default: ""
@@ -50,7 +50,7 @@ sync:
 
 resources:
   apps:
-    ml_intern:
+    databricks_ai_intern:
       name: databricks-ai-intern
       description: Autonomous ML intern — fine-tunes models on Databricks
       source_code_path: ./
@@ -60,21 +60,21 @@ resources:
   # require the direct-deployment engine). Pass an existing catalog via
   # ``--var uc_catalog=<name>`` or set the default below.
   schemas:
-    ml_intern_agent:
+    databricks_ai_intern_agent:
       catalog_name: ${var.uc_catalog}
       name: ${var.uc_schema}
-      comment: Registered models, prompts, and session artifacts for ml-intern.
+      comment: Registered models, prompts, and session artifacts for databricks-ai-intern.
       # UC grants for the App SP are applied out-of-band after deploy — bundle
       # dev mode prefixes the App name, which mangles the principal lookup.
       # See README / bootstrap scripts for the exact GRANT statements.
 
   volumes:
-    ml_intern_scratch:
+    databricks_ai_intern_scratch:
       catalog_name: ${var.uc_catalog}
-      schema_name: ${resources.schemas.ml_intern_agent.name}
+      schema_name: ${resources.schemas.databricks_ai_intern_agent.name}
       name: ${var.uc_volume}
       volume_type: MANAGED
-      comment: Scratch + session artifacts for ml-intern.
+      comment: Scratch + session artifacts for databricks-ai-intern.
 
 targets:
   # Workspace host comes from the DATABRICKS_HOST env var (bundle does not
@@ -87,4 +87,4 @@ targets:
   prod:
     mode: production
     workspace:
-      root_path: /Workspace/Shared/.bundle/ml-intern/prod
+      root_path: /Workspace/Shared/.bundle/databricks-ai-intern/prod

@@ -3,7 +3,7 @@
 
 resources:
   database_instances:
-    ml_intern_state:
+    databricks_ai_intern_state:
       name: ${var.lakebase_instance}
       capacity: CU_1
       stopped: false

@@ -1,7 +1,7 @@
 # Databricks notebook source
 import sys as _ml_sys, io as _ml_io
-_ML_INTERN_BUF = _ml_io.StringIO()
-class _ML_INTERN_TEE:
+_DATABRICKS_AI_INTERN_BUF = _ml_io.StringIO()
+class _DATABRICKS_AI_INTERN_TEE:
     def __init__(self, *streams):
         self._streams = streams
     def write(self, b):
@@ -15,8 +15,8 @@ class _ML_INTERN_TEE:
             except Exception: pass
     def isatty(self):
         return False
-_ml_sys.stdout = _ML_INTERN_TEE(_ml_sys.__stdout__, _ML_INTERN_BUF)
-_ml_sys.stderr = _ML_INTERN_TEE(_ml_sys.__stderr__, _ML_INTERN_BUF)
+_ml_sys.stdout = _DATABRICKS_AI_INTERN_TEE(_ml_sys.__stdout__, _DATABRICKS_AI_INTERN_BUF)
+_ml_sys.stderr = _DATABRICKS_AI_INTERN_TEE(_ml_sys.__stderr__, _DATABRICKS_AI_INTERN_BUF)
 try:
 
     """
@@ -46,20 +46,20 @@ try:
     mlflow.set_tracking_uri("databricks")
     mlflow.set_registry_uri("databricks-uc")
 
-    # The experiment /Shared/ml-intern directory already exists - use it
+    # The experiment /Shared/databricks-ai-intern directory already exists - use it
     # The error "For input string: None" seems to be a workspace-specific issue
     # Try with the experiment path differently
     import mlflow.tracking
     client = mlflow.tracking.MlflowClient()
     try:
-        exp = client.get_experiment_by_name("/Shared/ml-intern")
+        exp = client.get_experiment_by_name("/Shared/databricks-ai-intern")
         if exp:
             print(f"Found experiment: {exp.experiment_id}")
-            os.environ["MLFLOW_EXPERIMENT_NAME"] = "/Shared/ml-intern"
+            os.environ["MLFLOW_EXPERIMENT_NAME"] = "/Shared/databricks-ai-intern"
         else:
-            exp_id = client.create_experiment("/Shared/ml-intern")
+            exp_id = client.create_experiment("/Shared/databricks-ai-intern")
             print(f"Created experiment: {exp_id}")
-            os.environ["MLFLOW_EXPERIMENT_NAME"] = "/Shared/ml-intern"
+            os.environ["MLFLOW_EXPERIMENT_NAME"] = "/Shared/databricks-ai-intern"
     except Exception as e:
         print(f"Experiment lookup: {e}, will use default")
 
@@ -68,7 +68,7 @@ try:
     N_TRAIN = 200
     N_EVAL = 8
     MAX_SEQ_LEN = 512
-    OUTPUT_BASE = "/Volumes/serverless_lakebase_praneeth_catalog/ml_intern_test/scratch/ptb_smoke"
+    OUTPUT_BASE = "/Volumes/serverless_lakebase_praneeth_catalog/databricks_ai_intern_test/scratch/ptb_smoke"
 
     # ─── Load dataset via direct parquet download ───
     print("Loading GSM8K dataset...")
@@ -244,15 +244,15 @@ try:
             print()
         print("="*60)
 
-except BaseException as _ml_intern_err:
-    _ml_tail = _ML_INTERN_BUF.getvalue()[-4000:]
+except BaseException as _databricks_ai_intern_err:
+    _ml_tail = _DATABRICKS_AI_INTERN_BUF.getvalue()[-4000:]
     try:
-        dbutils.notebook.exit(_ml_tail + '\n[ml-intern] error: ' + repr(_ml_intern_err))
+        dbutils.notebook.exit(_ml_tail + '\n[databricks-ai-intern] error: ' + repr(_databricks_ai_intern_err))
     except Exception:
         pass
     raise
 else:
     try:
-        dbutils.notebook.exit(_ML_INTERN_BUF.getvalue()[-4000:])
+        dbutils.notebook.exit(_DATABRICKS_AI_INTERN_BUF.getvalue()[-4000:])
     except Exception:
         pass

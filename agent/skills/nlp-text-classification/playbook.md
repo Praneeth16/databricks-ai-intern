@@ -101,7 +101,7 @@ it; don't assume it.
 - Print the per-class F1, not just the macro average — a high macro-F1 hiding a
   near-zero minority-class F1 is a different story than the headline suggests.
 - Register the chosen model to UC:
-  `registered_model_name="ml_intern.agent.<name>"` with
+  `registered_model_name="databricks_ai_intern.agent.<name>"` with
   `mlflow.set_registry_uri("databricks-uc")`.
 
 ## When to stop

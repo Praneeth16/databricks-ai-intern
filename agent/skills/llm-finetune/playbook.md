@@ -106,7 +106,7 @@ better (over-training raises eval_loss; too-long context wastes compute).
 ## Phase 5 — Register + qualitative check
 
 - Register the winning adapter/model to UC:
-  `registered_model_name="ml_intern.agent.<name>"` with
+  `registered_model_name="databricks_ai_intern.agent.<name>"` with
   `mlflow.set_registry_uri("databricks-uc")`.
 - eval_loss is necessary but not sufficient — spot-check generations on held-out
   prompts for format compliance, refusals, and obvious regressions vs the base

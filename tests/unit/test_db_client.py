@@ -22,11 +22,11 @@ def _make_config(**overrides) -> Config:
     db = DatabricksConfig(
         host=overrides.get("host"),
         warehouse_id=overrides.get("warehouse_id"),
-        experiment_path=overrides.get("experiment_path", "/Shared/ml-intern"),
-        uc_catalog=overrides.get("uc_catalog", "ml_intern"),
+        experiment_path=overrides.get("experiment_path", "/Shared/databricks-ai-intern"),
+        uc_catalog=overrides.get("uc_catalog", "databricks_ai_intern"),
         uc_schema=overrides.get("uc_schema", "agent"),
         uc_volume=overrides.get("uc_volume", "scratch"),
-        secret_scope=overrides.get("secret_scope", "ml-intern"),
+        secret_scope=overrides.get("secret_scope", "databricks-ai-intern"),
         lakebase_instance=overrides.get("lakebase_instance"),
         instance_pool_id=overrides.get("instance_pool_id"),
     )
@@ -46,9 +46,9 @@ def test_resolve_settings_defaults_from_config():
         s = db_client.resolve_settings(cfg)
     assert s.host == "https://ws.cloud.databricks.com"  # trailing slash stripped
     assert s.warehouse_id == "abc123"
-    assert s.uc_catalog == "ml_intern"
-    assert s.full_schema == "ml_intern.agent"
-    assert s.volume_root == "/Volumes/ml_intern/agent/scratch"
+    assert s.uc_catalog == "databricks_ai_intern"
+    assert s.full_schema == "databricks_ai_intern.agent"
+    assert s.volume_root == "/Volumes/databricks_ai_intern/agent/scratch"
 
 
 def test_resolve_settings_env_overrides_config():
@@ -56,7 +56,7 @@ def test_resolve_settings_env_overrides_config():
     env = {
         "DATABRICKS_HOST": "https://env-host",
         "DATABRICKS_WAREHOUSE_ID": "from-env",
-        "ML_INTERN_INSTANCE_POOL_ID": "pool-xyz",
+        "DATABRICKS_AI_INTERN_INSTANCE_POOL_ID": "pool-xyz",
     }
     with patch.dict(os.environ, env, clear=True):
         s = db_client.resolve_settings(cfg)

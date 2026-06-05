@@ -7,16 +7,16 @@
   "databricks": {
     "host": "${DATABRICKS_HOST:-}",
     "warehouse_id": "${DATABRICKS_WAREHOUSE_ID:-}",
-    "experiment_path": "${ML_INTERN_EXPERIMENT_PATH:-/Shared/ml-intern}",
-    "uc_catalog": "${ML_INTERN_UC_CATALOG:-ml_intern}",
-    "uc_schema": "${ML_INTERN_UC_SCHEMA:-agent}",
-    "uc_volume": "${ML_INTERN_UC_VOLUME:-scratch}",
-    "secret_scope": "${ML_INTERN_SECRET_SCOPE:-ml-intern}",
-    "lakebase_instance": "${ML_INTERN_LAKEBASE_INSTANCE:-}",
-    "instance_pool_id": "${ML_INTERN_INSTANCE_POOL_ID:-}",
-    "default_node_type_id": "${ML_INTERN_NODE_TYPE:-g5.xlarge}",
-    "default_runtime_version": "${ML_INTERN_RUNTIME:-15.4.x-gpu-ml-scala2.12}",
-    "prompt_registry_name": "${ML_INTERN_PROMPT_NAME:-ml_intern.agent.system_prompt}"
+    "experiment_path": "${DATABRICKS_AI_INTERN_EXPERIMENT_PATH:-/Shared/databricks-ai-intern}",
+    "uc_catalog": "${DATABRICKS_AI_INTERN_UC_CATALOG:-databricks_ai_intern}",
+    "uc_schema": "${DATABRICKS_AI_INTERN_UC_SCHEMA:-agent}",
+    "uc_volume": "${DATABRICKS_AI_INTERN_UC_VOLUME:-scratch}",
+    "secret_scope": "${DATABRICKS_AI_INTERN_SECRET_SCOPE:-databricks-ai-intern}",
+    "lakebase_instance": "${DATABRICKS_AI_INTERN_LAKEBASE_INSTANCE:-}",
+    "instance_pool_id": "${DATABRICKS_AI_INTERN_INSTANCE_POOL_ID:-}",
+    "default_node_type_id": "${DATABRICKS_AI_INTERN_NODE_TYPE:-g5.xlarge}",
+    "default_runtime_version": "${DATABRICKS_AI_INTERN_RUNTIME:-15.4.x-gpu-ml-scala2.12}",
+    "prompt_registry_name": "${DATABRICKS_AI_INTERN_PROMPT_NAME:-databricks_ai_intern.agent.system_prompt}"
   },
   "mcpServers": {}
 }

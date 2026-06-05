@@ -1,10 +1,10 @@
-# plan.md — ml-intern → Auto-Researcher
+# plan.md — databricks-ai-intern → Auto-Researcher
 
 Action plan derived from two reviews:
 1. **Capability review** — engineering is strong; the agent escalates complexity and can't tell when it's done; **there is no way to measure the agent itself** (eval = placeholder).
 2. **Auto-researcher review** — discovery + finetune tools are real (9/10), but the research→implement→eval→iterate **loop is prose in the system prompt, not code** (3/10). Missing: persistence, reproduction-gap gate, eval-driven iteration, parallel hypothesis fan-out, novelty/dedup.
 
-Goal: turn ml-intern from a capable one-shot ML engineer into a **measurable, self-iterating auto-researcher** that works across tabular, LLM finetune, and general ML tasks.
+Goal: turn databricks-ai-intern from a capable one-shot ML engineer into a **measurable, self-iterating auto-researcher** that works across tabular, LLM finetune, and general ML tasks.
 
 ---
 

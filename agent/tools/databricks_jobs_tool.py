@@ -5,13 +5,13 @@ Dispatches by ``kind``:
 - ``finetune``  → Mosaic AI Model Training REST API (foundation-model fine-tune,
                   registers the resulting model into Unity Catalog).
 - ``script``    → Databricks Jobs ``runs/submit`` with a ``new_cluster`` spec
-                  (GPU pool-backed when ``ML_INTERN_INSTANCE_POOL_ID`` is set,
+                  (GPU pool-backed when ``DATABRICKS_AI_INTERN_INSTANCE_POOL_ID`` is set,
                   otherwise on-demand at the configured node type).
 - ``serverless``→ Databricks Jobs ``runs/submit`` with serverless compute (no
                   cluster spec, ``environment_key`` declares deps).
 
 Inline scripts are written to Workspace Files at
-``/Workspace/Users/<user>/ml-intern/<session>/<filename>`` and referenced by
+``/Workspace/Users/<user>/databricks-ai-intern/<session>/<filename>`` and referenced by
 path — never base64-wrapped into the job command. Secrets must be passed via
 the dynamic-reference syntax ``{{secrets/<scope>/<key>}}``; the tool refuses
 plaintext ``DATABRICKS_*`` / cloud-creds in agent-supplied env to keep the
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 # Hardware-flavor convenience aliases. Default mapping is AWS — workspaces on
-# Azure / GCP override via ``node_type_id`` arg or ML_INTERN_NODE_TYPE config.
+# Azure / GCP override via ``node_type_id`` arg or DATABRICKS_AI_INTERN_NODE_TYPE config.
 HARDWARE_FLAVOR_TO_NODE_TYPE: Dict[str, str] = {
     "cpu-basic":     "m5.large",
     "cpu-upgrade":   "m5.2xlarge",
@@ -67,7 +67,7 @@ KindType = Literal["finetune", "script", "serverless", "serverless_gpu"]
 # Mosaic AI Model Training endpoint. Stable since 2024-Q4. Override-able via
 # env so we don't have to ship a release if Databricks renames the path.
 _FINETUNE_API_PATH = os.environ.get(
-    "ML_INTERN_FINETUNE_API_PATH",
+    "DATABRICKS_AI_INTERN_FINETUNE_API_PATH",
     "/api/2.0/foundation-model-training/runs",
 )
 
@@ -193,8 +193,8 @@ def _experiment_url(host: str, experiment_path: str) -> str:
 
 _NOTEBOOK_STDOUT_WRAPPER_PRELUDE = '''\
 import sys as _ml_sys, io as _ml_io
-_ML_INTERN_BUF = _ml_io.StringIO()
-class _ML_INTERN_TEE:
+_DATABRICKS_AI_INTERN_BUF = _ml_io.StringIO()
+class _DATABRICKS_AI_INTERN_TEE:
     def __init__(self, *streams):
         self._streams = streams
     def write(self, b):
@@ -208,8 +208,8 @@ class _ML_INTERN_TEE:
             except Exception: pass
     def isatty(self):
         return False
-_ml_sys.stdout = _ML_INTERN_TEE(_ml_sys.__stdout__, _ML_INTERN_BUF)
-_ml_sys.stderr = _ML_INTERN_TEE(_ml_sys.__stderr__, _ML_INTERN_BUF)
+_ml_sys.stdout = _DATABRICKS_AI_INTERN_TEE(_ml_sys.__stdout__, _DATABRICKS_AI_INTERN_BUF)
+_ml_sys.stderr = _DATABRICKS_AI_INTERN_TEE(_ml_sys.__stderr__, _DATABRICKS_AI_INTERN_BUF)
 '''
 
 
@@ -239,7 +239,7 @@ for _ml_spec in [{spec_literal}]:
             [_ml_sys_pre.executable, "-m", "pip", "install", "--quiet", _ml_spec],
         )
     except Exception as _ml_pip_err:
-        print(f"[ml-intern pre-install] {{_ml_spec}} failed: {{_ml_pip_err}}")
+        print(f"[databricks-ai-intern pre-install] {{_ml_spec}} failed: {{_ml_pip_err}}")
 '''
 
 
@@ -255,16 +255,16 @@ def _wrap_user_script_with_stdout_capture(script: str) -> str:
     return (
         "try:\n"
         + textwrap.indent(script, "    ")
-        + "\nexcept BaseException as _ml_intern_err:\n"
-        "    _ml_tail = _ML_INTERN_BUF.getvalue()[-4000:]\n"
+        + "\nexcept BaseException as _databricks_ai_intern_err:\n"
+        "    _ml_tail = _DATABRICKS_AI_INTERN_BUF.getvalue()[-4000:]\n"
         "    try:\n"
-        "        dbutils.notebook.exit(_ml_tail + '\\n[ml-intern] error: ' + repr(_ml_intern_err))\n"
+        "        dbutils.notebook.exit(_ml_tail + '\\n[databricks-ai-intern] error: ' + repr(_databricks_ai_intern_err))\n"
         "    except Exception:\n"
         "        pass\n"
         "    raise\n"
         "else:\n"
         "    try:\n"
-        "        dbutils.notebook.exit(_ML_INTERN_BUF.getvalue()[-4000:])\n"
+        "        dbutils.notebook.exit(_DATABRICKS_AI_INTERN_BUF.getvalue()[-4000:])\n"
         "    except Exception:\n"
         "        pass\n"
     )
@@ -388,12 +388,12 @@ class DatabricksJobsTool:
     async def _build_submit_body(
         self, args: Dict[str, Any], workspace_path: str, kind: KindType,
     ) -> Dict[str, Any]:
-        run_name = args.get("run_name") or f"ml-intern-{int(time.time())}"
+        run_name = args.get("run_name") or f"databricks-ai-intern-{int(time.time())}"
         params = args.get("script_args") or []
         if not isinstance(params, list):
             params = [str(params)]
 
-        task: Dict[str, Any] = {"task_key": "ml_intern_run"}
+        task: Dict[str, Any] = {"task_key": "databricks_ai_intern_run"}
 
         body: Dict[str, Any] = {
             "run_name": run_name,
@@ -410,7 +410,7 @@ class DatabricksJobsTool:
                 "notebook_path": workspace_path,
                 "base_parameters": {f"arg{i}": str(p) for i, p in enumerate(params)},
             }
-            task["environment_key"] = "ml_intern_env"
+            task["environment_key"] = "databricks_ai_intern_env"
             task["compute"] = {
                 "hardware_accelerator": args.get("hardware_accelerator", "GPU_1xA10"),
             }
@@ -419,7 +419,7 @@ class DatabricksJobsTool:
             if deps:
                 env_spec["dependencies"] = list(deps)
             body["environments"] = [{
-                "environment_key": "ml_intern_env",
+                "environment_key": "databricks_ai_intern_env",
                 "spec": env_spec,
             }]
         elif kind == "serverless":
@@ -427,10 +427,10 @@ class DatabricksJobsTool:
                 "python_file": workspace_path,
                 "parameters": [str(p) for p in params],
             }
-            task["environment_key"] = "ml_intern_env"
+            task["environment_key"] = "databricks_ai_intern_env"
             deps = args.get("dependencies") or []
             body["environments"] = [{
-                "environment_key": "ml_intern_env",
+                "environment_key": "databricks_ai_intern_env",
                 "spec": {"client": "1", "dependencies": list(deps)},
             }]
             if env:
@@ -478,7 +478,7 @@ class DatabricksJobsTool:
         """Return the workspace path the job will execute.
 
         ``workspace_path`` is trusted as-is. Inline ``script`` content
-        stages to ``/Workspace/Users/<user>/ml-intern/<session>/<subdir>/<filename>``,
+        stages to ``/Workspace/Users/<user>/databricks-ai-intern/<session>/<subdir>/<filename>``,
         where ``<subdir>`` is ``notebooks`` for ``as_notebook=True`` and
         ``files`` otherwise. The split avoids the workspace API's hard
         rejection when re-uploading the same path with a different
@@ -509,7 +509,7 @@ class DatabricksJobsTool:
         )
         subdir = "notebooks" if as_notebook else "files"
         path = (
-            f"/Workspace/Users/{self.user_email or 'user'}/ml-intern/"
+            f"/Workspace/Users/{self.user_email or 'user'}/databricks-ai-intern/"
             f"{sid}/{subdir}/{filename}"
         )
 
@@ -784,7 +784,7 @@ class DatabricksJobsTool:
         submit = await self._build_submit_body(args, workspace_path, kind)
 
         body = {
-            "name": args.get("run_name") or f"ml-intern-sched-{int(time.time())}",
+            "name": args.get("run_name") or f"databricks-ai-intern-sched-{int(time.time())}",
             "tasks": submit["tasks"],
             "schedule": {
                 "quartz_cron_expression": cron,
@@ -876,7 +876,7 @@ class DatabricksJobsTool:
 
         register_to = args.get("register_to")
         if not register_to:
-            register_to = f"{self.settings.full_schema}.ml_intern_finetune_{int(time.time())}"
+            register_to = f"{self.settings.full_schema}.databricks_ai_intern_finetune_{int(time.time())}"
 
         payload: Dict[str, Any] = {
             "model": args["model"],
@@ -982,7 +982,7 @@ DATABRICKS_JOBS_TOOL_SPEC = {
         "2. `kind=\"script\"` (default) — Databricks Job with a GPU/CPU `new_cluster`. Provide `script` "
         "(inline Python — staged to Workspace Files automatically) OR `workspace_path` (existing file). "
         "Hardware via `hardware_flavor` (HF aliases mapped to AWS node types) or explicit `node_type_id`. "
-        "If `ML_INTERN_INSTANCE_POOL_ID` is configured, runs default to that pool.\n\n"
+        "If `DATABRICKS_AI_INTERN_INSTANCE_POOL_ID` is configured, runs default to that pool.\n\n"
         "3. `kind=\"serverless\"` — Serverless compute. Cheapest path for small CPU work. No cluster spec; "
         "deps declared via `dependencies`. Env vars not supported (use UC secrets).\n\n"
         "4. `kind=\"serverless_gpu\"` — AI Runtime serverless GPU (NVIDIA A10G default). "
@@ -994,19 +994,19 @@ DATABRICKS_JOBS_TOOL_SPEC = {
         "- Models MUST be registered to Unity Catalog (`<catalog>.<schema>.<name>`). "
         "Without `register_to`, Mosaic AI auto-names but you lose discoverability.\n"
         "- For raw `script` runs, write training code that calls `mlflow.set_registry_uri('databricks-uc')` "
-        "and `mlflow.<framework>.log_model(..., registered_model_name='ml_intern.agent.<name>')` so the "
+        "and `mlflow.<framework>.log_model(..., registered_model_name='databricks_ai_intern.agent.<name>')` so the "
         "trained artifact survives cluster termination.\n\n"
         "BATCH/ABLATION: submit ONE first, confirm it starts, THEN submit the rest. "
         "Cluster startup can take 3-5 min — don't fan out broken specs.\n\n"
-        "Secrets: pass as values via dynamic refs only — `{\"OPENAI_API_KEY\": \"{{secrets/ml-intern/openai}}\"}`. "
+        "Secrets: pass as values via dynamic refs only — `{\"OPENAI_API_KEY\": \"{{secrets/databricks-ai-intern/openai}}\"}`. "
         "Plaintext `DATABRICKS_*` / cloud credentials in `env` are silently dropped.\n\n"
         "Operations: run, ps, logs, inspect, cancel, scheduled run/ps/inspect/delete/suspend/resume.\n\n"
         f"Hardware aliases: {', '.join(HARDWARE_FLAVOR_TO_NODE_TYPE.keys())}. "
         "Override with `node_type_id` for non-AWS workspaces.\n\n"
         "Examples:\n"
         "Finetune: {\"operation\":\"run\",\"kind\":\"finetune\",\"model\":\"meta-llama/Llama-3.2-1B\","
-        "\"train_data_path\":\"ml_intern.agent.sft_train\",\"task_type\":\"INSTRUCTION_FINETUNE\","
-        "\"training_duration\":\"3ep\",\"register_to\":\"ml_intern.agent.llama_sft_v1\"}\n"
+        "\"train_data_path\":\"databricks_ai_intern.agent.sft_train\",\"task_type\":\"INSTRUCTION_FINETUNE\","
+        "\"training_duration\":\"3ep\",\"register_to\":\"databricks_ai_intern.agent.llama_sft_v1\"}\n"
         "Script: {\"operation\":\"run\",\"kind\":\"script\",\"script\":\"import mlflow; ...\","
         "\"hardware_flavor\":\"a10g-large\",\"timeout\":\"4h\"}\n"
         "Monitor: {\"operation\":\"ps\"}, {\"operation\":\"logs\",\"run_id\":12345}"
@@ -1032,7 +1032,7 @@ DATABRICKS_JOBS_TOOL_SPEC = {
                 "type": "string",
                 "description": (
                     "Inline Python to run. Staged to Workspace Files at "
-                    "/Workspace/Users/<user>/ml-intern/<session>/<filename>. Mutually exclusive with workspace_path."
+                    "/Workspace/Users/<user>/databricks-ai-intern/<session>/<filename>. Mutually exclusive with workspace_path."
                 ),
             },
             "workspace_path": {
@@ -1159,7 +1159,7 @@ DATABRICKS_JOBS_TOOL_SPEC = {
             },
             "experiment_path": {
                 "type": "string",
-                "description": "(finetune) MLflow experiment path. Defaults to ML_INTERN_EXPERIMENT_PATH.",
+                "description": "(finetune) MLflow experiment path. Defaults to DATABRICKS_AI_INTERN_EXPERIMENT_PATH.",
             },
         },
         "required": ["operation"],
@@ -1192,7 +1192,7 @@ async def databricks_jobs_handler(
         # Resolve settings + WC. Prefer OBO when the backend stashed a token.
         from agent.config import load_config
         cfg_path = os.environ.get(
-            "ML_INTERN_CONFIG_PATH",
+            "DATABRICKS_AI_INTERN_CONFIG_PATH",
             os.path.join(os.path.dirname(__file__), "..", "..", "configs", "main_agent_config.json"),
         )
         cfg = load_config(cfg_path) if (session is None or not getattr(session, "config", None)) else session.config

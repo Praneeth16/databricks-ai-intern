@@ -409,7 +409,7 @@ class Session:
             return None
 
     def _mirror_trajectory_to_lakebase(self, trajectory: dict) -> None:
-        """Push the trajectory blob into ``ml_intern_sessions.trajectory``.
+        """Push the trajectory blob into ``databricks_ai_intern_sessions.trajectory``.
 
         Failure is intentionally suppressed: Lakebase may be unconfigured
         (local CLI dev), the pool may be down, or the user may be running

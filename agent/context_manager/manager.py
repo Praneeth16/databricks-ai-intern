@@ -191,8 +191,8 @@ class ContextManager:
 
         Resolution order:
             1. MLflow Prompt Registry under
-               ``$ML_INTERN_PROMPT_NAME`` (default ``ml_intern.agent.system_prompt``)
-               at the alias / version named by ``$ML_INTERN_PROMPT_VERSION``
+               ``$DATABRICKS_AI_INTERN_PROMPT_NAME`` (default ``databricks_ai_intern.agent.system_prompt``)
+               at the alias / version named by ``$DATABRICKS_AI_INTERN_PROMPT_VERSION``
                (default ``latest``).
             2. Bundled YAML ``agent/prompts/<prompt_file_suffix>`` — used in
                local CLI runs, unit tests, and any environment where the
@@ -204,8 +204,8 @@ class ContextManager:
         import os
         from agent.core.prompt_registry import load_system_prompt as _load_prompt
 
-        prompt_name = os.environ.get("ML_INTERN_PROMPT_NAME", "ml_intern.agent.system_prompt")
-        prompt_version = os.environ.get("ML_INTERN_PROMPT_VERSION") or None
+        prompt_name = os.environ.get("DATABRICKS_AI_INTERN_PROMPT_NAME", "databricks_ai_intern.agent.system_prompt")
+        prompt_version = os.environ.get("DATABRICKS_AI_INTERN_PROMPT_VERSION") or None
         prompt_file = Path(__file__).parent.parent / "prompts" / f"{prompt_file_suffix}"
 
         try:

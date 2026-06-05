@@ -19,7 +19,7 @@ command:
   - "8000"
 
 env:
-  - name: ML_INTERN_BACKEND
+  - name: DATABRICKS_AI_INTERN_BACKEND
     value: databricks
   - name: MLFLOW_TRACKING_URI
     value: databricks
@@ -27,14 +27,14 @@ env:
     value: databricks-uc
   - name: PYTHONPATH
     value: /app/python/source_code
-  - name: ML_INTERN_UC_CATALOG
+  - name: DATABRICKS_AI_INTERN_UC_CATALOG
     value: serverless_lakebase_praneeth_catalog
-  - name: ML_INTERN_UC_SCHEMA
-    value: ml_intern_test
+  - name: DATABRICKS_AI_INTERN_UC_SCHEMA
+    value: databricks_ai_intern_test
   - name: DATABRICKS_WAREHOUSE_ID
     value: 4d39ac2e32b72a3a
-  - name: ML_INTERN_LAKEBASE_INSTANCE
-    value: ml-intern-state
+  - name: DATABRICKS_AI_INTERN_LAKEBASE_INSTANCE
+    value: databricks-ai-intern-state
 
 # User OBO scopes — tool calls made on behalf of the end user carry these
 # scopes. Admin-only operations (bootstrap, schema creation) run as the App

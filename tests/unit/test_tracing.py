@@ -25,7 +25,7 @@ def test_init_returns_false_without_experiment_path():
 
 def test_init_returns_false_when_mlflow_raises():
     with patch("mlflow.set_tracking_uri", side_effect=RuntimeError("no creds")):
-        ok = tracing.init_tracing("/Shared/ml-intern")
+        ok = tracing.init_tracing("/Shared/databricks-ai-intern")
     assert ok is False
 
 
@@ -33,9 +33,9 @@ def test_init_idempotent_after_first_success():
     with patch("mlflow.set_tracking_uri") as set_uri, \
          patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment"):
-        assert tracing.init_tracing("/Shared/ml-intern") is True
+        assert tracing.init_tracing("/Shared/databricks-ai-intern") is True
         # Second call returns True without re-invoking MLflow setters.
-        assert tracing.init_tracing("/Shared/ml-intern") is True
+        assert tracing.init_tracing("/Shared/databricks-ai-intern") is True
         assert set_uri.call_count == 1
 
 
@@ -51,7 +51,7 @@ def test_init_binds_experiment_id_for_trace_export():
          patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment", return_value=fake_experiment):
         os.environ.pop("MLFLOW_EXPERIMENT_ID", None)
-        assert tracing.init_tracing("/Shared/ml-intern") is True
+        assert tracing.init_tracing("/Shared/databricks-ai-intern") is True
         assert os.environ.get("MLFLOW_EXPERIMENT_ID") == "424242"
 
 
@@ -82,7 +82,7 @@ def test_trace_span_stamps_experiment_id_attribute():
     with patch("mlflow.set_tracking_uri"), \
          patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment", return_value=fake_experiment):
-        tracing.init_tracing("/Shared/ml-intern")
+        tracing.init_tracing("/Shared/databricks-ai-intern")
 
     with patch("mlflow.start_span", side_effect=fake_start_span):
         with tracing.trace_span("foo", {"k": "v"}):
@@ -111,7 +111,7 @@ async def test_traced_decorator_stamps_experiment_id_attribute():
     with patch("mlflow.set_tracking_uri"), \
          patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment", return_value=fake_experiment):
-        tracing.init_tracing("/Shared/ml-intern")
+        tracing.init_tracing("/Shared/databricks-ai-intern")
 
     @tracing.traced("op")
     async def fn(x):
@@ -131,7 +131,7 @@ def test_trace_span_yields_none_when_uninitialised():
 def test_trace_span_swallows_mlflow_failure():
     with patch("mlflow.set_tracking_uri"), patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment"):
-        tracing.init_tracing("/Shared/ml-intern")
+        tracing.init_tracing("/Shared/databricks-ai-intern")
 
     with patch("mlflow.start_span", side_effect=RuntimeError("boom")):
         with tracing.trace_span("foo") as span:
@@ -163,7 +163,7 @@ def _init_tracing_with_fake_experiment(exp_id: str = "7000"):
     with patch("mlflow.set_tracking_uri"), \
          patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment", return_value=fake_experiment):
-        assert tracing.init_tracing("/Shared/ml-intern") is True
+        assert tracing.init_tracing("/Shared/databricks-ai-intern") is True
 
 
 class _FakeSpan:
@@ -305,21 +305,21 @@ class _DirCollision(Exception):
 
 
 def test_init_falls_back_to_user_scoped_experiment_on_directory_collision():
-    """``/Shared/ml-intern`` collides with a workspace DIRECTORY on the
+    """``/Shared/databricks-ai-intern`` collides with a workspace DIRECTORY on the
     test workspace (legacy state). ``init_tracing`` must catch the
-    collision class, derive ``/Users/<email>/ml-intern`` via the SDK
+    collision class, derive ``/Users/<email>/databricks-ai-intern`` via the SDK
     user lookup, and re-call ``set_experiment``. Verifies the fallback
     target is bound and the second call returns a real experiment.
     """
-    fake_experiment = type("E", (), {"experiment_id": "9999", "name": "/Users/u@x/ml-intern"})()
+    fake_experiment = type("E", (), {"experiment_id": "9999", "name": "/Users/u@x/databricks-ai-intern"})()
     err = Exception(
-        "BAD_REQUEST: A node with name 'ml-intern' of type DIRECTORY "
+        "BAD_REQUEST: A node with name 'databricks-ai-intern' of type DIRECTORY "
         "already exists under parent 3955935534744294, cannot create "
         "node of type MLFLOW_EXPERIMENT"
     )
 
     def fake_set_experiment(path):
-        if path == "/Shared/ml-intern":
+        if path == "/Shared/databricks-ai-intern":
             raise err
         return fake_experiment
 
@@ -330,12 +330,12 @@ def test_init_falls_back_to_user_scoped_experiment_on_directory_collision():
          patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment", side_effect=fake_set_experiment) as set_exp, \
          patch("agent.core.db_client.get_workspace_client", return_value=fake_wc):
-        ok = tracing.init_tracing("/Shared/ml-intern")
+        ok = tracing.init_tracing("/Shared/databricks-ai-intern")
 
     assert ok is True
     # Two attempts: original + fallback under user scope.
     assert set_exp.call_count == 2
-    assert set_exp.call_args_list[1].args[0] == "/Users/u@x/ml-intern"
+    assert set_exp.call_args_list[1].args[0] == "/Users/u@x/databricks-ai-intern"
 
 
 def test_init_falls_back_on_legacy_for_input_string_none_error():
@@ -346,7 +346,7 @@ def test_init_falls_back_on_legacy_for_input_string_none_error():
     err = Exception('BAD_REQUEST: For input string: "None"')
 
     def fake_set_experiment(path):
-        if path == "/Shared/ml-intern":
+        if path == "/Shared/databricks-ai-intern":
             raise err
         return fake_experiment
 
@@ -357,7 +357,7 @@ def test_init_falls_back_on_legacy_for_input_string_none_error():
          patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment", side_effect=fake_set_experiment) as set_exp, \
          patch("agent.core.db_client.get_workspace_client", return_value=fake_wc):
-        assert tracing.init_tracing("/Shared/ml-intern") is True
+        assert tracing.init_tracing("/Shared/databricks-ai-intern") is True
     assert set_exp.call_count == 2
 
 
@@ -370,13 +370,13 @@ def test_init_does_not_fallback_on_unrelated_failure():
     with patch("mlflow.set_tracking_uri"), \
          patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment", side_effect=err) as set_exp:
-        ok = tracing.init_tracing("/Shared/ml-intern")
+        ok = tracing.init_tracing("/Shared/databricks-ai-intern")
     assert ok is False
     # Only one attempt — no fallback for unrelated errors.
     assert set_exp.call_count == 1
 
 
-def _collision_err(name: str = "ml-intern", parent: str = "1") -> Exception:
+def _collision_err(name: str = "databricks-ai-intern", parent: str = "1") -> Exception:
     return Exception(
         f"BAD_REQUEST: A node with name '{name}' of type DIRECTORY "
         f"already exists under parent {parent}, cannot create "
@@ -386,7 +386,7 @@ def _collision_err(name: str = "ml-intern", parent: str = "1") -> Exception:
 
 def test_init_walks_fallback_cascade_when_user_scoped_path_also_collides():
     """Observed on fe-vm-lakebase-praneeth (PTB-smoke run-E2): both
-    ``/Shared/ml-intern`` AND ``/Users/<email>/ml-intern`` existed as
+    ``/Shared/databricks-ai-intern`` AND ``/Users/<email>/databricks-ai-intern`` existed as
     DIRECTORY nodes from prior exploration. The first user-scoped
     fallback ALSO collided. The cascade must walk to the next candidate
     (``<leaf>-mlflow``) and use that.
@@ -407,11 +407,11 @@ def test_init_walks_fallback_cascade_when_user_scoped_path_also_collides():
          patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment", side_effect=fake_set_experiment), \
          patch("agent.core.db_client.get_workspace_client", return_value=fake_wc):
-        assert tracing.init_tracing("/Shared/ml-intern") is True
+        assert tracing.init_tracing("/Shared/databricks-ai-intern") is True
 
-    assert attempts[0] == "/Shared/ml-intern"
-    assert attempts[1] == "/Users/u@x/ml-intern"
-    assert attempts[2] == "/Users/u@x/ml-intern-mlflow"
+    assert attempts[0] == "/Shared/databricks-ai-intern"
+    assert attempts[1] == "/Users/u@x/databricks-ai-intern"
+    assert attempts[2] == "/Users/u@x/databricks-ai-intern-mlflow"
     assert len(attempts) == 3
 
 
@@ -427,7 +427,7 @@ def test_init_gives_up_after_full_cascade_exhausted():
          patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment", side_effect=_collision_err()) as set_exp, \
          patch("agent.core.db_client.get_workspace_client", return_value=fake_wc):
-        ok = tracing.init_tracing("/Shared/ml-intern")
+        ok = tracing.init_tracing("/Shared/databricks-ai-intern")
     assert ok is False
     # Original + 3 cascade candidates = 4 attempts.
     assert set_exp.call_count == 4
@@ -442,7 +442,7 @@ def test_init_gives_up_cleanly_when_email_unresolvable():
          patch("mlflow.set_registry_uri"), \
          patch("mlflow.set_experiment", side_effect=_collision_err()) as set_exp, \
          patch("agent.core.db_client.get_workspace_client", side_effect=RuntimeError("no auth")):
-        ok = tracing.init_tracing("/Shared/ml-intern")
+        ok = tracing.init_tracing("/Shared/databricks-ai-intern")
     assert ok is False
     # Only the original attempt — no fallback path because email unresolved.
     assert set_exp.call_count == 1

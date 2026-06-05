@@ -27,7 +27,7 @@ def test_load_system_prompt_prefers_registry(tmp_path):
     fake = MagicMock()
     fake.template = "REGISTRY-WIN"
     with patch.object(prompt_registry, "load_from_registry", return_value="REGISTRY-WIN"):
-        out = prompt_registry.load_system_prompt("ml_intern.agent.system_prompt", yaml_path=p)
+        out = prompt_registry.load_system_prompt("databricks_ai_intern.agent.system_prompt", yaml_path=p)
     assert out == "REGISTRY-WIN"
 
 
@@ -35,7 +35,7 @@ def test_load_system_prompt_falls_back_to_yaml(tmp_path):
     p = tmp_path / "system_prompt.yaml"
     p.write_text("system_prompt: 'YAML-FALLBACK'\n")
     with patch.object(prompt_registry, "load_from_registry", return_value=None):
-        out = prompt_registry.load_system_prompt("ml_intern.agent.system_prompt", yaml_path=p)
+        out = prompt_registry.load_system_prompt("databricks_ai_intern.agent.system_prompt", yaml_path=p)
     assert out == "YAML-FALLBACK"
 
 

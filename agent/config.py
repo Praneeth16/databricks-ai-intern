@@ -26,16 +26,16 @@ class DatabricksConfig(BaseModel):
 
     host: str | None = None
     warehouse_id: str | None = None
-    experiment_path: str = "/Shared/ml-intern"
-    uc_catalog: str = "ml_intern"
+    experiment_path: str = "/Shared/databricks-ai-intern"
+    uc_catalog: str = "databricks_ai_intern"
     uc_schema: str = "agent"
     uc_volume: str = "scratch"
-    secret_scope: str = "ml-intern"
+    secret_scope: str = "databricks-ai-intern"
     lakebase_instance: str | None = None
     instance_pool_id: str | None = None
     default_node_type_id: str = "g5.xlarge"
     default_runtime_version: str = "15.4.x-gpu-ml-scala2.12"
-    prompt_registry_name: str = "ml_intern.agent.system_prompt"
+    prompt_registry_name: str = "databricks_ai_intern.agent.system_prompt"
 
     @field_validator("host", "warehouse_id", "lakebase_instance", "instance_pool_id", mode="before")
     @classmethod

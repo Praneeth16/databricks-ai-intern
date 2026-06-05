@@ -225,7 +225,7 @@ async def repos_handler(arguments: Dict[str, Any], session: Any = None,
 def _load_default_config():
     from agent.config import load_config
     cfg_path = os.environ.get(
-        "ML_INTERN_CONFIG_PATH",
+        "DATABRICKS_AI_INTERN_CONFIG_PATH",
         os.path.join(os.path.dirname(__file__), "..", "..", "configs", "main_agent_config.json"),
     )
     return load_config(cfg_path)

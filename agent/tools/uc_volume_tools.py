@@ -154,7 +154,7 @@ UC_VOLUME_TOOL_SPEC = {
         "storage tier under /Volumes/<catalog>/<schema>/<volume>/... — use this for training data, "
         "checkpoints, and any artifact you want to persist beyond a single job run.\n\n"
         "All paths must start with /Volumes/. The default volume for this agent is configured via "
-        "ML_INTERN_UC_CATALOG/SCHEMA/VOLUME.\n\n"
+        "DATABRICKS_AI_INTERN_UC_CATALOG/SCHEMA/VOLUME.\n\n"
         "Operations:\n"
         "- ls: list directory contents\n"
         "- read: download file (up to max_bytes, default 64KB)\n"
@@ -197,7 +197,7 @@ async def uc_volume_handler(arguments: Dict[str, Any], session: Any = None,
 def _load_default_config():
     from agent.config import load_config
     cfg_path = os.environ.get(
-        "ML_INTERN_CONFIG_PATH",
+        "DATABRICKS_AI_INTERN_CONFIG_PATH",
         os.path.join(os.path.dirname(__file__), "..", "..", "configs", "main_agent_config.json"),
     )
     return load_config(cfg_path)

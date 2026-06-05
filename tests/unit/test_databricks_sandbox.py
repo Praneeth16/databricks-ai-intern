@@ -24,12 +24,12 @@ from agent.tools import databricks_sandbox as ds
 def _settings(**o):
     d = dict(
         host="https://ws", warehouse_id="wh1",
-        experiment_path="/Shared/ml-intern",
-        uc_catalog="ml_intern", uc_schema="agent", uc_volume="scratch",
-        secret_scope="ml-intern", lakebase_instance=None, instance_pool_id=None,
+        experiment_path="/Shared/databricks-ai-intern",
+        uc_catalog="databricks_ai_intern", uc_schema="agent", uc_volume="scratch",
+        secret_scope="databricks-ai-intern", lakebase_instance=None, instance_pool_id=None,
         default_node_type_id="g5.xlarge",
         default_runtime_version="15.4.x-gpu-ml-scala2.12",
-        prompt_registry_name="ml_intern.agent.system_prompt",
+        prompt_registry_name="databricks_ai_intern.agent.system_prompt",
     )
     d.update(o)
     return db_client.DatabricksSettings(**d)
@@ -130,9 +130,9 @@ def test_download_routes_volume_path_to_files_api():
     resp = MagicMock()
     resp.contents = io.BytesIO(b"hello")
     wc.files.download.return_value = resp
-    data = ds._download(wc, "/Volumes/ml_intern/agent/scratch/x.txt")
+    data = ds._download(wc, "/Volumes/databricks_ai_intern/agent/scratch/x.txt")
     assert data == b"hello"
-    wc.files.download.assert_called_once_with(file_path="/Volumes/ml_intern/agent/scratch/x.txt")
+    wc.files.download.assert_called_once_with(file_path="/Volumes/databricks_ai_intern/agent/scratch/x.txt")
 
 
 def test_download_routes_workspace_path_to_workspace_api():
@@ -152,9 +152,9 @@ def test_download_rejects_other_paths():
 
 def test_upload_routes_volume_path():
     wc = MagicMock()
-    ds._upload(wc, "/Volumes/ml_intern/agent/scratch/x.txt", b"data")
+    ds._upload(wc, "/Volumes/databricks_ai_intern/agent/scratch/x.txt", b"data")
     kwargs = wc.files.upload.call_args.kwargs
-    assert kwargs["file_path"] == "/Volumes/ml_intern/agent/scratch/x.txt"
+    assert kwargs["file_path"] == "/Volumes/databricks_ai_intern/agent/scratch/x.txt"
     assert kwargs["overwrite"] is True
 
 
@@ -187,19 +187,19 @@ def test_read_uses_download_and_marks_read():
     resp.contents = io.BytesIO(b"line one\nline two\n")
     wc.files.download.return_value = resp
     sb = _make_sandbox(wc)
-    out = sb.read("/Volumes/ml_intern/agent/scratch/x.txt")
+    out = sb.read("/Volumes/databricks_ai_intern/agent/scratch/x.txt")
     assert out.success
     assert "1\tline one" in out.output
-    assert "/Volumes/ml_intern/agent/scratch/x.txt" in sb._files_read
+    assert "/Volumes/databricks_ai_intern/agent/scratch/x.txt" in sb._files_read
 
 
 def test_write_uploads_and_marks_read():
     wc = MagicMock()
     sb = _make_sandbox(wc)
-    out = sb.write("/Volumes/ml_intern/agent/scratch/x.txt", "hello")
+    out = sb.write("/Volumes/databricks_ai_intern/agent/scratch/x.txt", "hello")
     assert out.success
     wc.files.upload.assert_called_once()
-    assert "/Volumes/ml_intern/agent/scratch/x.txt" in sb._files_read
+    assert "/Volumes/databricks_ai_intern/agent/scratch/x.txt" in sb._files_read
 
 
 def test_edit_refuses_unread_file():

@@ -45,7 +45,7 @@ def _settings():
 
 def _config_path() -> str:
     return os.environ.get(
-        "ML_INTERN_CONFIG_PATH",
+        "DATABRICKS_AI_INTERN_CONFIG_PATH",
         os.path.join(os.path.dirname(__file__), "..", "configs", "main_agent_config.json"),
     )
 

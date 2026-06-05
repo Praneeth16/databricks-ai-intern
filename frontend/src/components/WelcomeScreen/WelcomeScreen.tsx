@@ -22,7 +22,7 @@ function BrandMark({ size = 32 }: { size?: number }) {
     <Box
       component="img"
       src="/logo.svg"
-      alt="ML Intern"
+      alt="Databricks AI Intern"
       sx={{ width: size, height: size, display: 'block' }}
     />
   );
@@ -227,7 +227,7 @@ export default function WelcomeScreen() {
               color: 'var(--text)',
             }}
           >
-            ML Intern
+            Databricks AI Intern
           </Typography>
           <Chip
             label="DATABRICKS"
@@ -335,7 +335,7 @@ export default function WelcomeScreen() {
             lineHeight: 1.6,
           }}
         >
-          ML Intern reads the literature, ingests Unity Catalog datasets, runs
+          Databricks AI Intern reads the literature, ingests Unity Catalog datasets, runs
           Mosaic AI fine-tune jobs, and registers the trained model — all
           inside your Databricks workspace, with full MLflow lineage.
         </Typography>
@@ -572,7 +572,7 @@ export default function WelcomeScreen() {
         >
           <BrandMark size={14} />
           <Typography sx={{ fontSize: '0.72rem', color: 'var(--muted-text)' }}>
-            ML Intern · Built on Databricks Foundation Model API · MLflow · Unity Catalog
+            Databricks AI Intern · Built on Databricks Foundation Model API · MLflow · Unity Catalog
           </Typography>
         </Stack>
       </Box>

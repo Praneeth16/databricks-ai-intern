@@ -1,13 +1,13 @@
 """Reload a previously saved session into the active CLI/backend session.
 
-Storage layout: Lakebase row in ``ml_intern_sessions`` carries the full
+Storage layout: Lakebase row in ``databricks_ai_intern_sessions`` carries the full
 trajectory JSONB (messages + events + metadata). Frontend, CLI, and
 future API replay all read the same Postgres row, so a conversation that
 started in the browser can be picked up from ``databricks-ai-intern
 --resume <id>`` on the user's laptop, and vice versa.
 
 Filesystem fallback: when ``backend.lakebase.get_pool()`` returns None
-(no ``ML_INTERN_LAKEBASE_INSTANCE`` configured — local dev, unit tests,
+(no ``DATABRICKS_AI_INTERN_LAKEBASE_INSTANCE`` configured — local dev, unit tests,
 offline CLI), the list/load helpers degrade to scanning ``session_logs/``
 on disk, the same shape the upstream HF#233 port used. Keeps the CLI
 usable when the workspace isn't reachable.

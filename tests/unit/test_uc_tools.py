@@ -25,12 +25,12 @@ from agent.tools import (
 def _settings(**o):
     d = dict(
         host="https://ws", warehouse_id="wh1",
-        experiment_path="/Shared/ml-intern",
-        uc_catalog="ml_intern", uc_schema="agent", uc_volume="scratch",
-        secret_scope="ml-intern", lakebase_instance=None, instance_pool_id=None,
+        experiment_path="/Shared/databricks-ai-intern",
+        uc_catalog="databricks_ai_intern", uc_schema="agent", uc_volume="scratch",
+        secret_scope="databricks-ai-intern", lakebase_instance=None, instance_pool_id=None,
         default_node_type_id="g5.xlarge",
         default_runtime_version="15.4.x-gpu-ml-scala2.12",
-        prompt_registry_name="ml_intern.agent.system_prompt",
+        prompt_registry_name="databricks_ai_intern.agent.system_prompt",
     )
     d.update(o)
     return db_client.DatabricksSettings(**d)
@@ -45,12 +45,12 @@ def _settings(**o):
 async def test_uc_volume_ls_renders_listing():
     wc = MagicMock()
     item = MagicMock()
-    item.path = "/Volumes/ml_intern/agent/scratch/foo.parquet"
+    item.path = "/Volumes/databricks_ai_intern/agent/scratch/foo.parquet"
     item.is_directory = False
     item.file_size = 1024
     wc.files.list_directory_contents.return_value = iter([item])
     tool = uc_volume_tools.UCVolumeTool(wc=wc, settings=_settings())
-    out = await tool.execute({"operation": "ls", "path": "/Volumes/ml_intern/agent/scratch"})
+    out = await tool.execute({"operation": "ls", "path": "/Volumes/databricks_ai_intern/agent/scratch"})
     assert "foo.parquet" in out["formatted"]
     assert "1024" in out["formatted"]
 
@@ -69,12 +69,12 @@ async def test_uc_volume_write_uploads_bytes():
     tool = uc_volume_tools.UCVolumeTool(wc=wc, settings=_settings())
     out = await tool.execute({
         "operation": "write",
-        "path": "/Volumes/ml_intern/agent/scratch/x.txt",
+        "path": "/Volumes/databricks_ai_intern/agent/scratch/x.txt",
         "content": "hello",
     })
     assert not out.get("isError")
     kwargs = wc.files.upload.call_args[1]
-    assert kwargs["file_path"] == "/Volumes/ml_intern/agent/scratch/x.txt"
+    assert kwargs["file_path"] == "/Volumes/databricks_ai_intern/agent/scratch/x.txt"
     assert kwargs["overwrite"] is True
     body = kwargs["contents"].read()
     assert body == b"hello"
@@ -90,7 +90,7 @@ async def test_uc_volume_read_decodes_utf8():
     tool = uc_volume_tools.UCVolumeTool(wc=wc, settings=_settings())
     out = await tool.execute({
         "operation": "read",
-        "path": "/Volumes/ml_intern/agent/scratch/x.txt",
+        "path": "/Volumes/databricks_ai_intern/agent/scratch/x.txt",
     })
     assert "hello world" in out["formatted"]
 
@@ -101,10 +101,10 @@ async def test_uc_volume_rm_calls_files_delete():
     tool = uc_volume_tools.UCVolumeTool(wc=wc, settings=_settings())
     out = await tool.execute({
         "operation": "rm",
-        "path": "/Volumes/ml_intern/agent/scratch/x.txt",
+        "path": "/Volumes/databricks_ai_intern/agent/scratch/x.txt",
     })
     assert not out.get("isError")
-    wc.files.delete.assert_called_once_with(file_path="/Volumes/ml_intern/agent/scratch/x.txt")
+    wc.files.delete.assert_called_once_with(file_path="/Volumes/databricks_ai_intern/agent/scratch/x.txt")
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ async def test_uc_dataset_describe_runs_describe_sql():
     tool._execute_sql = fake_exec  # type: ignore
     out = await tool.execute({
         "operation": "describe",
-        "table": "ml_intern.agent.alpaca",
+        "table": "databricks_ai_intern.agent.alpaca",
     })
     assert "alpaca" in out["formatted"]
     assert "42 rows" in out["formatted"]
@@ -156,7 +156,7 @@ async def test_uc_dataset_validates_table_name():
 async def test_uc_model_list_renders_table():
     wc = MagicMock()
     m = MagicMock()
-    m.full_name = "ml_intern.agent.llama_sft_v1"
+    m.full_name = "databricks_ai_intern.agent.llama_sft_v1"
     m.comment = "first try"
     m.updated_at = "2026-04-25"
     wc.registered_models.list.return_value = iter([m])
@@ -171,13 +171,13 @@ async def test_uc_model_set_alias_calls_sdk():
     tool = uc_model_tools.UCModelTool(wc=wc, settings=_settings())
     out = await tool.execute({
         "operation": "set_alias",
-        "full_name": "ml_intern.agent.llama_sft_v1",
+        "full_name": "databricks_ai_intern.agent.llama_sft_v1",
         "alias": "champion",
         "version": 3,
     })
     assert not out.get("isError")
     wc.registered_models.set_alias.assert_called_once_with(
-        full_name="ml_intern.agent.llama_sft_v1", alias="champion", version_num=3,
+        full_name="databricks_ai_intern.agent.llama_sft_v1", alias="champion", version_num=3,
     )
 
 
@@ -223,7 +223,7 @@ async def test_hf_to_uc_ingest_dataset_uploads_each_file_and_creates_table(tmp_p
     # Two files should have been uploaded.
     assert wc.files.upload.call_count == 2
     target_paths = [c.kwargs["file_path"] for c in wc.files.upload.call_args_list]
-    assert all(p.startswith("/Volumes/ml_intern/agent/scratch/hf/datasets/") for p in target_paths)
+    assert all(p.startswith("/Volumes/databricks_ai_intern/agent/scratch/hf/datasets/") for p in target_paths)
     # CTAS issued.
     assert sql_seen and "CREATE OR REPLACE TABLE" in sql_seen[0]
     assert "format => 'parquet'" in sql_seen[0]
@@ -265,7 +265,7 @@ async def test_hf_to_uc_ingest_file_uploads_single():
     assert not out.get("isError"), out
     wc.files.upload.assert_called_once()
     target = wc.files.upload.call_args.kwargs["file_path"]
-    assert target.startswith("/Volumes/ml_intern/agent/scratch/hf/datasets/openai__gsm8k/")
+    assert target.startswith("/Volumes/databricks_ai_intern/agent/scratch/hf/datasets/openai__gsm8k/")
     assert target.endswith("main/test.parquet")
 
 

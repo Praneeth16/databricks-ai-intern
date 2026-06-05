@@ -26,16 +26,16 @@ import pickle
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
-DATA_DIR = "/Volumes/serverless_lakebase_praneeth_catalog/ml_intern_test/scratch/f1_pitstops"
+DATA_DIR = "/Volumes/serverless_lakebase_praneeth_catalog/databricks_ai_intern_test/scratch/f1_pitstops"
 TRAIN_PATH = f"{DATA_DIR}/train.csv"
 TEST_PATH = f"{DATA_DIR}/test.csv"
 SUBMISSION_PATH = f"{DATA_DIR}/submission.csv"
-MODEL_NAME = "serverless_lakebase_praneeth_catalog.ml_intern_test.f1_pitstops_clf"
+MODEL_NAME = "serverless_lakebase_praneeth_catalog.databricks_ai_intern_test.f1_pitstops_clf"
 
 # ─── MLflow setup ────────────────────────────────────────────────────────────
 mlflow.set_tracking_uri("databricks")
 mlflow.set_registry_uri("databricks-uc")
-mlflow.set_experiment("/Shared/ml-intern")
+mlflow.set_experiment("/Shared/databricks-ai-intern")
 
 # ─── Load data ───────────────────────────────────────────────────────────────
 print("Loading data...")

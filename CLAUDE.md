@@ -23,7 +23,7 @@ Port is staged over 10 phases (see `.plan/` if present, or ask before deep work)
 | Deploy | Databricks Asset Bundles (`databricks.yml` + `resources/*.yml`). One `databricks bundle deploy`. |
 | Auth | On Apps: `X-Forwarded-Access-Token` header (OBO). Locally: SDK unified chain (PAT → profile → M2M). |
 | Dashboards | Lakeview dashboards in the bundle — no custom frontend KPI code. |
-| Prompts | MLflow Prompt Registry under `ml_intern.agent.system_prompt`, yaml fallback. |
+| Prompts | MLflow Prompt Registry under `databricks_ai_intern.agent.system_prompt`, yaml fallback. |
 
 ## Commands
 
@@ -67,12 +67,12 @@ Integration tests gated on `DATABRICKS_HOST` — skip cleanly otherwise.
 export DATABRICKS_HOST=https://<your-workspace>.cloud.databricks.com  # bundle does NOT interpolate ${VAR} into workspace.host
 databricks bundle validate
 databricks bundle deploy --target dev     # or prod
-databricks bundle run ml_intern           # open the App
+databricks bundle run databricks_ai_intern           # open the App
 
 # One-shot post-deploy bootstrap (each idempotent):
-python scripts/bootstrap_pool.py --name ml-intern-warm
+python scripts/bootstrap_pool.py --name databricks-ai-intern-warm
 python scripts/register_prompt.py
-databricks bundle run ml_intern_register_prompt --target dev   # or run as a Job
+databricks bundle run databricks_ai_intern_register_prompt --target dev   # or run as a Job
 python scripts/wire_eval_trigger.py --job-id <eval_job_id_from_deploy>
 ```
 
@@ -122,7 +122,7 @@ Queue-based async loop. Operations → `submission_loop()` → events. Provider-
 - `routes/auth.py` — minimal `/auth/me`, `/auth/status`. No OAuth flow (Apps proxy handles it).
 - `dependencies.py` — `get_current_user` reads `X-Forwarded-*` headers in Apps mode, SDK chain locally. `extract_obo_token` for per-request OBO plumbing.
 - `session_manager.py` — in-memory WS→Session map for hot path; per-create / per-cleanup writes to Lakebase via `backend/lakebase.py` (best-effort, fail-soft when not configured).
-- `lakebase.py` — psycopg connection pool over Lakebase. `init(config)` builds the pool with a 45-min connection lifetime so OAuth token rotation never strands a request. Schema: `ml_intern_sessions`. Helpers: `upsert_session`, `mark_session_inactive`. `get_pool()` returns None when Lakebase isn't configured.
+- `lakebase.py` — psycopg connection pool over Lakebase. `init(config)` builds the pool with a 45-min connection lifetime so OAuth token rotation never strands a request. Schema: `databricks_ai_intern_sessions`. Helpers: `upsert_session`, `mark_session_inactive`. `get_pool()` returns None when Lakebase isn't configured.
 
 ### Config (`agent/config.py` + `configs/main_agent_config.json`)
 JSON config with `${VAR:-default}` env interpolation. `DatabricksConfig` submodel carries workspace binding (catalog, schema, volume, warehouse, lakebase, prompt registry name). Env overrides config-file values.
@@ -132,9 +132,9 @@ JSON config with `${VAR:-default}` env interpolation. `DatabricksConfig` submode
 - **Never instantiate `WorkspaceClient` directly.** Go through `agent.core.db_client`. Tests bust caches via `reset_clients_for_tests()`.
 - **Never accept `DATABRICKS_TOKEN` / `DATABRICKS_CLIENT_SECRET` from LLM-emitted `env` dicts.** The jobs tool filters these out before submitting. Auth is resolved server-side only.
 - **User-scoped actions use OBO.** Route handlers should pass `extract_obo_token(request)` into `get_workspace_client_for_user(token, host)` for tool-triggered ops so the audit log names the user, not the App SP.
-- **Jobs reference Workspace Files, not base64-wrapped inline scripts.** When the agent authors a training script, write to `/Workspace/Users/<user>/ml-intern/<session>/train.py` and reference it from the job spec.
+- **Jobs reference Workspace Files, not base64-wrapped inline scripts.** When the agent authors a training script, write to `/Workspace/Users/<user>/databricks-ai-intern/<session>/train.py` and reference it from the job spec.
 - **Secrets in jobs use `{{secrets/scope/key}}` dynamic references** — never plaintext.
-- **Model registration is `registered_model_name="ml_intern.agent.<name>"`** (three-level UC name), with `mlflow.set_registry_uri("databricks-uc")`.
+- **Model registration is `registered_model_name="databricks_ai_intern.agent.<name>"`** (three-level UC name), with `mlflow.set_registry_uri("databricks-uc")`.
 - **Session telemetry = MLflow Tracing (`@mlflow.trace`).** Don't write custom Delta tables for agent activity.
 
 ## Review gate

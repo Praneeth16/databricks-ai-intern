@@ -1,4 +1,4 @@
-"""Bootstrap (or refresh) the ml-intern warm-GPU instance pool.
+"""Bootstrap (or refresh) the databricks-ai-intern warm-GPU instance pool.
 
 Asset Bundles don't yet expose ``instance_pools`` as a first-class resource
 type, so the pool is created via the SDK on first deploy. Idempotent —
@@ -8,7 +8,7 @@ type rather than creating a duplicate.
 Usage::
 
     python scripts/bootstrap_pool.py                        # defaults
-    python scripts/bootstrap_pool.py --name ml-intern-warm \\
+    python scripts/bootstrap_pool.py --name databricks-ai-intern-warm \\
         --node-type-id g5.xlarge \\
         --runtime 15.4.x-gpu-ml-scala2.12 \\
         --max-capacity 4
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--name", default="ml-intern-warm")
+    parser.add_argument("--name", default="databricks-ai-intern-warm")
     parser.add_argument("--node-type-id", default="g5.xlarge")
     parser.add_argument("--runtime", default="15.4.x-gpu-ml-scala2.12")
     parser.add_argument("--min-idle", type=int, default=0)
@@ -45,7 +45,7 @@ def main() -> int:
         "max_capacity": args.max_capacity,
         "idle_instance_autotermination_minutes": args.idle_autoterminate_min,
         "preloaded_spark_versions": [args.runtime],
-        "custom_tags": {"ml_intern_purpose": "sandbox-pool"},
+        "custom_tags": {"databricks_ai_intern_purpose": "sandbox-pool"},
     }
 
     existing = None

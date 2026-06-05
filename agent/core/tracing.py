@@ -60,7 +60,7 @@ def init_tracing(experiment_path: str | None) -> bool:
     ``BAD_REQUEST: A node with name ... of type DIRECTORY already exists``
     when ``path`` collides with a pre-existing Workspace directory (legacy
     state, leftover artefacts). On that exact error class we retry under
-    ``/Users/<email>/ml-intern`` so the agent never silently runs without
+    ``/Users/<email>/databricks-ai-intern`` so the agent never silently runs without
     traces just because of workspace housekeeping.
     """
     global _INITIALIZED, _EXPERIMENT_ID
@@ -134,8 +134,8 @@ def _fallback_candidates(original: str) -> list[str]:
        across sessions so the user reuses one experiment.
     2. ``/Users/<email>/<leaf>-mlflow`` — when the user already has a
        workspace directory named after the leaf (a real pattern we hit on
-       fe-vm-lakebase-praneeth, where both /Shared/ml-intern AND
-       /Users/<email>/ml-intern existed as DIRECTORY nodes from prior
+       fe-vm-lakebase-praneeth, where both /Shared/databricks-ai-intern AND
+       /Users/<email>/databricks-ai-intern existed as DIRECTORY nodes from prior
        exploration). Suffix is deterministic so still session-stable.
     3. ``/Users/<email>/<leaf>-<uuid8>`` — last-resort escape; non-stable
        across sessions but breaks the chain when every nicer name is wedged.
@@ -143,7 +143,7 @@ def _fallback_candidates(original: str) -> list[str]:
     email = _resolve_user_email()
     if not email:
         return []
-    leaf = original.rsplit("/", 1)[-1] or "ml-intern"
+    leaf = original.rsplit("/", 1)[-1] or "databricks-ai-intern"
     import uuid
 
     return [

@@ -75,7 +75,7 @@ async def _ensure_sandbox(
     if cfg is None:
         from agent.config import load_config
         cfg_path = os.environ.get(
-            "ML_INTERN_CONFIG_PATH",
+            "DATABRICKS_AI_INTERN_CONFIG_PATH",
             os.path.join(os.path.dirname(__file__), "..", "..", "configs", "main_agent_config.json"),
         )
         cfg = load_config(cfg_path)
@@ -161,7 +161,7 @@ SANDBOX_CREATE_TOOL_SPEC = {
         "Skip for one-shot operations or scripts already validated elsewhere — submit them "
         "directly via databricks_jobs.\n\n"
         f"Hardware: {', '.join(HARDWARE_FLAVOR_TO_NODE_TYPE.keys())}. "
-        "If ML_INTERN_INSTANCE_POOL_ID is configured, runs default to that pool (faster start)."
+        "If DATABRICKS_AI_INTERN_INSTANCE_POOL_ID is configured, runs default to that pool (faster start)."
     ),
     "parameters": {
         "type": "object",

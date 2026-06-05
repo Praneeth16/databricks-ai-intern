@@ -9,7 +9,7 @@ behavior for Claude-on-Databricks.
 These tests intentionally call paid model APIs through Databricks
 Foundation Model API and are skipped unless::
 
-    ML_INTERN_LIVE_LLM_TESTS=1
+    DATABRICKS_AI_INTERN_LIVE_LLM_TESTS=1
     DATABRICKS_HOST=...
     DATABRICKS_TOKEN=...   (or rely on a configured profile)
 
@@ -38,21 +38,21 @@ from agent.core.llm_params import _resolve_llm_params
 
 
 # Honour an optional env file so contributors can keep paid creds out of
-# the shell history (``ML_INTERN_LIVE_ENV_FILE=~/.ml-intern-live.env``).
-if (env_file := os.environ.get("ML_INTERN_LIVE_ENV_FILE")) and load_dotenv:
+# the shell history (``DATABRICKS_AI_INTERN_LIVE_ENV_FILE=~/.databricks-ai-intern-live.env``).
+if (env_file := os.environ.get("DATABRICKS_AI_INTERN_LIVE_ENV_FILE")) and load_dotenv:
     load_dotenv(Path(env_file))
 
-LIVE_TESTS_ENABLED = os.environ.get("ML_INTERN_LIVE_LLM_TESTS") == "1"
+LIVE_TESTS_ENABLED = os.environ.get("DATABRICKS_AI_INTERN_LIVE_LLM_TESTS") == "1"
 
 # Foundation Model API endpoint ids on Databricks. Override per-workspace
 # via env if the default endpoint names diverge (some workspaces ship
 # ``databricks-claude-opus-4-7`` etc — keep the override path).
 CLAUDE_MODEL = os.environ.get(
-    "ML_INTERN_LIVE_CLAUDE_MODEL",
+    "DATABRICKS_AI_INTERN_LIVE_CLAUDE_MODEL",
     "databricks/databricks-claude-opus-4-6",
 )
 NON_CLAUDE_MODEL = os.environ.get(
-    "ML_INTERN_LIVE_NON_CLAUDE_MODEL",
+    "DATABRICKS_AI_INTERN_LIVE_NON_CLAUDE_MODEL",
     "databricks/databricks-meta-llama-3-3-70b-instruct",
 )
 
@@ -79,7 +79,7 @@ REPORT_RESULT_TOOL = [
 
 def _skip_without_live_flag() -> None:
     if not LIVE_TESTS_ENABLED:
-        pytest.skip("set ML_INTERN_LIVE_LLM_TESTS=1 to run paid live LLM tests")
+        pytest.skip("set DATABRICKS_AI_INTERN_LIVE_LLM_TESTS=1 to run paid live LLM tests")
 
 
 def _skip_without_databricks_auth() -> None:

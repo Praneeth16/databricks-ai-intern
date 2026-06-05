@@ -36,10 +36,10 @@ submission, with no human-in-the-loop coding.
    - **Optuna** 8-trial Bayesian search on the winning model
      (n_estimators ≤ 1000 with early stopping).
    - Log every trial to MLflow Tracing (under
-     `/Shared/ml-intern/f1_pitstops` after the agent's automatic
+     `/Shared/databricks-ai-intern/f1_pitstops` after the agent's automatic
      workspace-collision fallback fired).
    - Register the tuned model to Unity Catalog as
-     `serverless_lakebase_praneeth_catalog.ml_intern_test.f1_pitstops_clf`
+     `serverless_lakebase_praneeth_catalog.databricks_ai_intern_test.f1_pitstops_clf`
      with alias `champion`.
    - Score the test set, save `submission.csv` to the UC Volume.
 3. **Submitted the resulting `submission.csv`** to Kaggle via the user's
@@ -50,7 +50,7 @@ Each failure was diagnosed + self-recovered, not retried blindly.
 
 | Job | Run ID | Outcome | What broke + how the agent fixed it |
 |---|---|---|---|
-| v1 | `928602971631277` | failed | `mlflow.set_experiment("/Shared/ml-intern")` collided with a workspace directory on this workspace. Agent re-rooted the experiment to `/Shared/ml-intern/f1_pitstops`. |
+| v1 | `928602971631277` | failed | `mlflow.set_experiment("/Shared/databricks-ai-intern")` collided with a workspace directory on this workspace. Agent re-rooted the experiment to `/Shared/databricks-ai-intern/f1_pitstops`. |
 | v2 | `996345980368321` | partial — XGBoost only | LightGBM GPU mode requires OpenCL, which isn't shipped in the serverless_gpu image. Agent's first read of the error said *"LightGBM GPU failed; XGBoost is already 0.9019 — fix LGBM and retry"*. |
 | v3 | `255049342341198` | training succeeded, registration failed | UC model registration needs an MLflow model signature. Agent's read: *"AUC is 0.904218 and submission already saved — just need to fix the registration"*. |
 | v4 | `113986038932691` | ✅ success | Added `infer_signature(X_val, y_pred)` + `input_example=` to `mlflow.<framework>.log_model(...)`. Model registered to UC at version 1, alias `champion`. |
@@ -62,7 +62,7 @@ Each failure was diagnosed + self-recovered, not retried blindly.
 | Validation AUC (Year=2025 hold-out) | 0.9042 |
 | Public-LB AUC (Kaggle hidden test) | **0.94820** |
 | MLflow run id | `b6045fe84d22410c806752493cbeb1ae` |
-| UC model URI | `serverless_lakebase_praneeth_catalog.ml_intern_test.f1_pitstops_clf` v1 (alias `champion`) |
+| UC model URI | `serverless_lakebase_praneeth_catalog.databricks_ai_intern_test.f1_pitstops_clf` v1 (alias `champion`) |
 | Submission file | `artifacts/submission.csv` |
 | LB snapshot | `artifacts/leaderboard-snapshot.csv` (taken at 2026-05-25 21:09 UTC) |
 
@@ -93,8 +93,8 @@ What worked well:
   and Optuna installed cleanly inside the serverless GPU job without the
   agent needing to script around missing packages.
 - **Tracing-fallback cascade (issue #14) fired live in production.** The
-  agent-side init logged the fallback transparently — `/Shared/ml-intern`
-  collided, then `/Users/praneeth.paikray@databricks.com/ml-intern`. The
+  agent-side init logged the fallback transparently — `/Shared/databricks-ai-intern`
+  collided, then `/Users/praneeth.paikray@databricks.com/databricks-ai-intern`. The
   in-script `mlflow.set_experiment` hit the same collision pattern and
   the agent applied the same fix manually (re-rooting to a sub-path).
 - **No-tool continuation guard (issue #10) never had to fire.** The
@@ -106,7 +106,7 @@ What worked well:
 Things to improve (next iteration):
 
 - **Workspace-collision should be transparent in-script too.** The
-  agent had to re-root `/Shared/ml-intern` → `/Shared/ml-intern/f1_pitstops`
+  agent had to re-root `/Shared/databricks-ai-intern` → `/Shared/databricks-ai-intern/f1_pitstops`
   manually inside the job script. The fallback cascade we added in
   issue #14 lives only on the agent side. Worth porting the same
   pattern into a small helper that user-authored scripts can call —
@@ -168,7 +168,7 @@ kaggle-f1-pitstops-s6e5/
    kaggle competitions submit \
      -c playground-series-s6e5 \
      -f submission.csv \
-     -m "ml-intern agent v1"
+     -m "databricks-ai-intern agent v1"
    ```
 
 ## Cleanup (deferred until competition closes)
@@ -181,7 +181,7 @@ databricks fs rm -r dbfs:/Volumes/<cat>/<schema>/<vol>/f1_pitstops/
 
 # Drop the UC model + all versions
 databricks unity-catalog models delete \
-  serverless_lakebase_praneeth_catalog.ml_intern_test.f1_pitstops_clf
+  serverless_lakebase_praneeth_catalog.databricks_ai_intern_test.f1_pitstops_clf
 
 # (Workspace Files staged by the jobs tool clean themselves up on
 #  next session — no manual cleanup needed.)

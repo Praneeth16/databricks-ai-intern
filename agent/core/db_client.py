@@ -82,7 +82,7 @@ def resolve_settings(agent_config: AgentConfig) -> DatabricksSettings:
         uc_volume=db.uc_volume,
         secret_scope=db.secret_scope,
         lakebase_instance=db.lakebase_instance,
-        instance_pool_id=os.environ.get("ML_INTERN_INSTANCE_POOL_ID") or db.instance_pool_id,
+        instance_pool_id=os.environ.get("DATABRICKS_AI_INTERN_INSTANCE_POOL_ID") or db.instance_pool_id,
         default_node_type_id=db.default_node_type_id,
         default_runtime_version=db.default_runtime_version,
         prompt_registry_name=db.prompt_registry_name,
@@ -190,7 +190,7 @@ def build_lakebase_conninfo(settings: DatabricksSettings) -> str:
     """
     if not settings.lakebase_instance:
         raise RuntimeError(
-            "lakebase_instance not configured. Set ML_INTERN_LAKEBASE_INSTANCE."
+            "lakebase_instance not configured. Set DATABRICKS_AI_INTERN_LAKEBASE_INSTANCE."
         )
     wc = get_workspace_client(settings)
     instance = wc.database.get_database_instance(name=settings.lakebase_instance)

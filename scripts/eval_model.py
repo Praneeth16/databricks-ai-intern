@@ -1,7 +1,7 @@
 """Placeholder eval script invoked by resources/eval_job.yml.
 
 Triggered by the MLflow Deployment Job whenever a new model version lands
-under ``ml_intern.agent.*``. Receives ``--model <full_name>`` and
+under ``databricks_ai_intern.agent.*``. Receives ``--model <full_name>`` and
 ``--version <int>`` from the trigger; writes a tag on that version with
 the eval result so downstream alias rolls (e.g. ``set_alias champion``)
 can gate on it.
@@ -38,7 +38,7 @@ def main() -> int:
         client.set_model_version_tag(
             name=args.model,
             version=str(args.version),
-            key="ml_intern_eval",
+            key="databricks_ai_intern_eval",
             value="placeholder",
         )
         logger.info("Tagged %s/%s eval=placeholder", args.model, args.version)
