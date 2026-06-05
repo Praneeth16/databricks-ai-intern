@@ -1,14 +1,8 @@
-<p align="center">
-  <img src="frontend/public/databricks-logo.svg" alt="Databricks" width="90" />
-</p>
+# Databricks AI Intern
 
-<h1 align="center">Databricks AI Intern</h1>
-
-<p align="center">
-  <em>An autonomous ML engineer that reads the literature, ingests Unity Catalog
-  datasets, runs Mosaic AI jobs, and registers trained models — natively on the
-  Databricks AI runtime, until the numbers go up.</em>
-</p>
+*An autonomous ML engineer that reads the literature, ingests Unity Catalog
+datasets, runs Mosaic AI jobs, and registers trained models — natively on the
+Databricks AI runtime, until the numbers go up.*
 
 ---
 
