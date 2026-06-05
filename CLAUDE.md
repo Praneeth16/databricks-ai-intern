@@ -4,8 +4,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repo
 
-Fork of huggingface/ml-intern being **ported from Hugging Face infra to the Databricks AI runtime**. All HF Jobs / HF Hub / HF OAuth coupling is being replaced with Databricks-native primitives. There is no HF fallback — Databricks is the only supported backend.
-
 Port is staged over 10 phases (see `.plan/` if present, or ask before deep work). Phase 1 (config + auth + `db_client`) has landed — phases 2+ will swap the jobs tool, storage tools, sandbox, and prompts.
 
 ## Databricks-native component map
