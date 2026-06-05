@@ -1,0 +1,90 @@
+# Databricks Asset Bundle for databricks-ai-intern.
+#
+# One artifact, one deploy command:
+#
+#     databricks bundle deploy --target <env>
+#
+# Declares: the App itself, UC catalog/schema/volume, Lakebase instance,
+# secret scope, default instance pool (warm GPUs for sandbox), Lakeview KPI
+# dashboard, and bootstrap/eval jobs. Bundle deploy grants the App service
+# principal the exact UC privileges the resources need.
+
+bundle:
+  name: databricks-ai-intern
+
+variables:
+  uc_catalog:
+    description: Unity Catalog for agent artifacts + telemetry
+    default: ml_intern
+  uc_schema:
+    description: Schema under the catalog
+    default: agent
+  uc_volume:
+    description: Volume name for scratch + session artifacts
+    default: scratch
+  secret_scope:
+    description: Secret scope name
+    default: ml-intern
+  warehouse_id:
+    description: Existing serverless SQL warehouse ID
+  lakebase_instance:
+    description: Lakebase instance name for session state
+    default: ml-intern-state
+  instance_pool_id:
+    description: Warm instance pool ID for sandbox clusters (optional)
+    default: ""
+  node_type_gpu:
+    default: g5.xlarge
+  runtime_ml_gpu:
+    default: 15.4.x-gpu-ml-scala2.12
+
+include:
+  - resources/*.yml
+
+# Force-include the built frontend bundle. ``static/`` is gitignored, but the
+# Apps runtime needs the compiled assets present in the source upload — the
+# backend mounts <repo>/static at /. Run ``npm run build`` before deploy.
+sync:
+  include:
+    - static/**
+
+resources:
+  apps:
+    ml_intern:
+      name: databricks-ai-intern
+      description: Autonomous ML intern — fine-tunes models on Databricks
+      source_code_path: ./
+      # app.yaml is auto-picked up from source_code_path.
+
+  # Catalog must already exist — bundle does not create it (catalog resources
+  # require the direct-deployment engine). Pass an existing catalog via
+  # ``--var uc_catalog=<name>`` or set the default below.
+  schemas:
+    ml_intern_agent:
+      catalog_name: ${var.uc_catalog}
+      name: ${var.uc_schema}
+      comment: Registered models, prompts, and session artifacts for ml-intern.
+      # UC grants for the App SP are applied out-of-band after deploy — bundle
+      # dev mode prefixes the App name, which mangles the principal lookup.
+      # See README / bootstrap scripts for the exact GRANT statements.
+
+  volumes:
+    ml_intern_scratch:
+      catalog_name: ${var.uc_catalog}
+      schema_name: ${resources.schemas.ml_intern_agent.name}
+      name: ${var.uc_volume}
+      volume_type: MANAGED
+      comment: Scratch + session artifacts for ml-intern.
+
+targets:
+  # Workspace host comes from the DATABRICKS_HOST env var (bundle does not
+  # support ${VAR} interpolation in workspace.host). Set it before running
+  # ``databricks bundle deploy --target <env>``.
+  dev:
+    mode: development
+    default: true
+
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/ml-intern/prod

@@ -1,0 +1,28 @@
+# F1 Pit Stops S6E5 — Kaggle Playground Series.
+# Values sourced from examples/kaggle-f1-pitstops-s6e5/FINAL_RESULTS.md.
+id: kaggle-f1-pitstops-s6e5
+kind: tabular
+metric: roc_auc
+higher_is_better: true
+baseline_score: 0.94820   # v1 one-shot baseline XGB
+human_ceiling: 0.94924    # v5.2 — Optuna XGB+CB blend, honest GBM ceiling
+leaderboard:
+  top_public: 0.9545      # reached by blending other authors' subs, not pure modeling
+  proxy: rank_percentile
+  # Populate `scores:` with a competitor-score snapshot for a real percentile;
+  # with only `top_public`, percentile degrades to above/below-top (boolean).
+  # scores: [...]  # e.g. from examples/.../artifacts/leaderboard-snapshot-v2.csv
+data:
+  # PLACEHOLDER paths — real feature datasets (UC volume or raw Kaggle CSVs)
+  # get wired when Phase 2 connects the runner to a live agent. The holdout
+  # below cannot be applied to a submission file.
+  train: examples/kaggle-f1-pitstops-s6e5/artifacts        # placeholder
+  test: examples/kaggle-f1-pitstops-s6e5/artifacts/submission.csv  # placeholder
+holdout:
+  # Year=2025 temporal holdout was the only valid LB proxy (val→LB gap +0.042, stable).
+  type: temporal
+  column: Year
+  value: 2025
+budget:
+  max_cost_usd: 25.0
+  max_iterations: 30

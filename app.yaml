@@ -1,0 +1,53 @@
+# Databricks App manifest for databricks-ai-intern.
+#
+# Deployed via Databricks Asset Bundles (see databricks.yml). The Apps
+# runtime injects DATABRICKS_* env vars and forwards the end-user's OAuth
+# token via the X-Forwarded-Access-Token header — see backend/dependencies.py.
+#
+# Scoped access is declared via `resources` below. Grant the App's service
+# principal USE on each referenced resource during bundle deploy rather than
+# granting broad workspace permissions.
+
+command:
+  - uvicorn
+  - main:app
+  - --app-dir
+  - backend
+  - --host
+  - 0.0.0.0
+  - --port
+  - "8000"
+
+env:
+  - name: ML_INTERN_BACKEND
+    value: databricks
+  - name: MLFLOW_TRACKING_URI
+    value: databricks
+  - name: MLFLOW_REGISTRY_URI
+    value: databricks-uc
+  - name: PYTHONPATH
+    value: /app/python/source_code
+  - name: ML_INTERN_UC_CATALOG
+    value: serverless_lakebase_praneeth_catalog
+  - name: ML_INTERN_UC_SCHEMA
+    value: ml_intern_test
+  - name: DATABRICKS_WAREHOUSE_ID
+    value: 4d39ac2e32b72a3a
+  - name: ML_INTERN_LAKEBASE_INSTANCE
+    value: ml-intern-state
+
+# User OBO scopes — tool calls made on behalf of the end user carry these
+# scopes. Admin-only operations (bootstrap, schema creation) run as the App
+# service principal and are NOT gated by this list.
+user_authorization:
+  scopes:
+    - serving.serving-endpoints
+    - sql
+    - files.files
+    - iam.current-user:read
+    - catalog.connections
+    - workspace.workspace
+
+# Resource bindings (serving endpoint, SQL warehouse, UC, secrets, Lakebase)
+# are wired post-deploy via the Apps console — bundle does not interpolate
+# ${var.*} inside app.yaml, so values can't be templated here.

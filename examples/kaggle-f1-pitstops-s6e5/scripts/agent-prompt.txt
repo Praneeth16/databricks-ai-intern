@@ -1,0 +1,40 @@
+You are the ML intern on Databricks. Build a Kaggle Playground S6E5 (Predicting F1 Pit Stops) submission end-to-end.
+
+DATA (already staged in UC Volume)
+- Train: /Volumes/serverless_lakebase_praneeth_catalog/ml_intern_test/scratch/f1_pitstops/train.csv  (~440k rows)
+- Test:  /Volumes/serverless_lakebase_praneeth_catalog/ml_intern_test/scratch/f1_pitstops/test.csv   (~188k rows)
+- Sample submission: .../sample_submission.csv
+- Columns: id, Driver, Compound, Race, Year, PitStop, LapNumber, Stint, TyreLife, Position, LapTime (s), LapTime_Delta, Cumulative_Degradation, RaceProgress, Position_Change, PitNextLap
+- TARGET (train only): PitNextLap (binary 0/1 — will this driver pit on the next lap?)
+- Eval metric on the competition leaderboard: ROC-AUC
+
+TASK
+1. Inspect schema + class balance via uc_inspect_dataset / uc_volume read of a sample.
+2. Train a strong classifier via databricks_jobs (kind=serverless_gpu, A10 is fine).
+   Strategy:
+   - Drop `id` from features; one-hot or target-encode Driver / Compound / Race; keep Year numeric.
+   - Stratified group-aware split: hold out the most recent Year as validation (Year=2025), train on earlier years. This mimics how Kaggle splits its private test.
+   - Train XGBoost AND LightGBM in parallel, pick the higher-AUC one by val score.
+   - Light hyperparameter tune: 8-trial Hyperopt or Optuna on the winner. n_estimators up to 1000 with early stopping.
+   - Log everything (params, AUC, feature importances, model artifact) to MLflow under `/Shared/ml-intern`.
+   - Register the winning model to UC at
+     `serverless_lakebase_praneeth_catalog.ml_intern_test.f1_pitstops_clf`.
+3. Score the test set, produce a `submission.csv` (columns: id, PitNextLap) and save it to
+   `/Volumes/serverless_lakebase_praneeth_catalog/ml_intern_test/scratch/f1_pitstops/submission.csv`.
+4. Final report (print as your last assistant message):
+   - val AUC (XGBoost vs LightGBM, then tuned winner)
+   - top-5 features by importance
+   - UC model URI + version
+   - MLflow run id
+   - first 5 rows of submission.csv (id, PitNextLap) — sanity check
+   - any failure modes hit + how you worked around them
+
+CONSTRAINTS
+- Headless. Max 25 min wall-clock from now.
+- Trust the pre-install prelude: datasets, peft, trl, accelerate are pre-installed. xgboost + lightgbm + optuna may need one pip line each — fine.
+- Use `dtype=` not `torch_dtype` (transformers 5.x). Not relevant here, but pre-installed runtime is the same.
+- Do NOT modify any agent source code. Workarounds happen inside the job script.
+
+KAGGLE CONTEXT (for your final summary)
+- This is Tabular Playground Series, season 6 episode 5: https://www.kaggle.com/competitions/playground-series-s6e5
+- AUC > 0.85 is competitive for a quick baseline; > 0.90 is strong.

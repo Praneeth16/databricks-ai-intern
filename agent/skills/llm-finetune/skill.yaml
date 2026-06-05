@@ -1,0 +1,28 @@
+name: llm-finetune
+version: 1.0.0
+summary: |
+  Evidence-first recipe for fine-tuning LLMs on Mosaic AI Model Training
+  (databricks_jobs kind=finetune). Confirm base model + dataset format +
+  task_type first; hold out an eval set with a clear metric (eval_loss /
+  perplexity, LOWER is better); treat LoRA-vs-full and LR/epochs/context_length
+  as ablations driven by `sweep`; reproduce the model-card/paper number BEFORE
+  trying to beat it; log every run via `experiment`; watch for eval-set leakage.
+
+triggers:
+  # Matched (case-insensitive substring) against the task description and recent
+  # user turns. On a match, load this playbook via read_skill BEFORE writing any
+  # training script or jobs spec.
+  - "finetune"
+  - "fine-tune"
+  - "LoRA"
+  - "QLoRA"
+  - "SFT"
+  - "instruction tuning"
+  - "eval_loss"
+  - "perplexity"
+  - "continued pretraining"
+
+applies_when:
+  task_shape: finetune
+
+playbook: playbook.md

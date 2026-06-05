@@ -1,0 +1,9 @@
+# Lakebase (managed Postgres) instance for session manager state and quotas.
+# Small, cheap instance — rows are small and traffic is low.
+
+resources:
+  database_instances:
+    ml_intern_state:
+      name: ${var.lakebase_instance}
+      capacity: CU_1
+      stopped: false

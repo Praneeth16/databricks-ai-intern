@@ -1,0 +1,27 @@
+name: kaggle-tabular-classification
+version: 1.0.0
+summary: |
+  Ranked playbook for Kaggle tabular binary/multiclass competitions where the
+  metric is AUC, log-loss, or accuracy. Encodes lessons from Playground S6E5
+  (F1 Pit Stops): race-context features, within-stint sequence features,
+  hill-climb blending over diverse base models, many-seed retrain, and
+  one-round pseudo-labeling. Trust LB over CV after 2 LB regressions.
+
+triggers:
+  # The agent searches its current task description and recent user turns for
+  # these substrings (case-insensitive). On a match it should load the
+  # playbook via the read_skill tool BEFORE writing any model code.
+  - "kaggle"
+  - "playground series"
+  - "kaggle competition"
+  - "tabular classification"
+  - "AUC"
+  - "log-loss"
+  - "leaderboard"
+
+applies_when:
+  task_shape: classification        # binary or multiclass
+  data_shape: tabular               # CSV / Parquet, not images / text / audio
+  has_temporal_column: optional     # time-split decisions live in the playbook
+
+playbook: playbook.md

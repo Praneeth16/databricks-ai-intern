@@ -1,0 +1,121 @@
+# Lakeview dashboard for ml-intern observability.
+#
+# Sources data from:
+#   - MLflow Tracing spans (system.mlflow.traces) — agent loop turns, tool calls,
+#     LLM calls. Span attributes carry session_id, model, tool name, operation.
+#   - system.serving.endpoint_usage — per-token cost / latency for AI Gateway
+#     calls; replaces what we used to compute manually from litellm responses.
+#   - system.billing.usage — DBU consumption per training Job / Mosaic AI run,
+#     joined on the workflow run id custom tag.
+#
+# Deploy via Asset Bundle (databricks.yml resources block already references
+# this file). One dashboard per workspace; permissions inherited from the
+# bundle target.
+
+resources:
+  dashboards:
+    ml_intern_dashboard:
+      display_name: ml-intern observability
+      warehouse_id: ${var.warehouse_id}
+      parent_path: /Shared/ml-intern
+      serialized_dashboard: |
+        {
+          "datasets": [
+            {
+              "name": "agent_turns",
+              "displayName": "Agent turns (last 30d)",
+              "queryLines": [
+                "SELECT",
+                "  date_trunc('day', start_time) AS day,",
+                "  count(*) AS turns,",
+                "  approx_percentile(execution_time_ms / 1000.0, 0.5) AS p50_seconds,",
+                "  approx_percentile(execution_time_ms / 1000.0, 0.95) AS p95_seconds",
+                "FROM system.mlflow.traces",
+                "WHERE experiment_name = '/Shared/ml-intern'",
+                "  AND span_name = 'agent_turn'",
+                "  AND start_time >= current_date() - INTERVAL 30 DAYS",
+                "GROUP BY 1 ORDER BY 1"
+              ]
+            },
+            {
+              "name": "tool_mix",
+              "displayName": "Tool call mix (last 7d)",
+              "queryLines": [
+                "SELECT",
+                "  attributes:tool::string AS tool,",
+                "  attributes:operation::string AS operation,",
+                "  count(*) AS calls",
+                "FROM system.mlflow.traces",
+                "WHERE experiment_name = '/Shared/ml-intern'",
+                "  AND span_name LIKE 'tool.%'",
+                "  AND start_time >= current_date() - INTERVAL 7 DAYS",
+                "GROUP BY 1, 2 ORDER BY calls DESC LIMIT 50"
+              ]
+            },
+            {
+              "name": "ai_gateway_cost",
+              "displayName": "AI Gateway cost (last 30d)",
+              "queryLines": [
+                "SELECT",
+                "  date_trunc('day', request_time) AS day,",
+                "  served_entity_name AS endpoint,",
+                "  sum(usage_ml_prompt_tokens) AS prompt_tokens,",
+                "  sum(usage_ml_completion_tokens) AS completion_tokens,",
+                "  sum(usage_total_tokens_dollar_amount) AS dollars",
+                "FROM system.serving.endpoint_usage",
+                "WHERE request_time >= current_date() - INTERVAL 30 DAYS",
+                "GROUP BY 1, 2 ORDER BY 1, 2"
+              ]
+            },
+            {
+              "name": "training_dbu",
+              "displayName": "Training DBUs by job (last 30d)",
+              "queryLines": [
+                "SELECT",
+                "  custom_tags['ml_intern_purpose'] AS purpose,",
+                "  custom_tags['databricks_job_run_id'] AS run_id,",
+                "  sum(usage_quantity) AS dbus,",
+                "  sum(usage_quantity * list_price.pricing.default) AS dollars",
+                "FROM system.billing.usage usage",
+                "LEFT JOIN system.billing.list_prices list_price",
+                "  ON usage.sku_name = list_price.sku_name",
+                "  AND usage.usage_date BETWEEN list_price.price_start_time AND coalesce(list_price.price_end_time, current_date())",
+                "WHERE billing_origin_product = 'JOBS'",
+                "  AND usage.usage_date >= current_date() - INTERVAL 30 DAYS",
+                "  AND custom_tags['ml_intern_purpose'] IS NOT NULL",
+                "GROUP BY 1, 2 ORDER BY dbus DESC LIMIT 50"
+              ]
+            },
+            {
+              "name": "errors",
+              "displayName": "Failed tool calls (last 24h)",
+              "queryLines": [
+                "SELECT",
+                "  start_time,",
+                "  attributes:tool::string AS tool,",
+                "  attributes:operation::string AS operation,",
+                "  attributes:session_id::string AS session_id,",
+                "  status_message",
+                "FROM system.mlflow.traces",
+                "WHERE experiment_name = '/Shared/ml-intern'",
+                "  AND span_name LIKE 'tool.%'",
+                "  AND status_code = 'ERROR'",
+                "  AND start_time >= current_timestamp() - INTERVAL 24 HOURS",
+                "ORDER BY start_time DESC LIMIT 200"
+              ]
+            }
+          ],
+          "pages": [
+            {
+              "name": "overview",
+              "displayName": "Overview",
+              "layout": [
+                { "widget": { "name": "turns_chart",   "queries": [{"name":"agent_turns"}] } },
+                { "widget": { "name": "tools_table",   "queries": [{"name":"tool_mix"}] } },
+                { "widget": { "name": "cost_chart",    "queries": [{"name":"ai_gateway_cost"}] } },
+                { "widget": { "name": "dbu_chart",     "queries": [{"name":"training_dbu"}] } },
+                { "widget": { "name": "errors_table",  "queries": [{"name":"errors"}] } }
+              ]
+            }
+          ]
+        }

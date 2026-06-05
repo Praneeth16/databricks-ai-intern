@@ -1,0 +1,10 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="none">
+  <defs>
+    <linearGradient id="lava" x1="32" y1="4" x2="32" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FF6B47"/>
+      <stop offset="100%" stop-color="#C42A18"/>
+    </linearGradient>
+  </defs>
+  <path d="M32 4 L57 18 L57 46 L32 60 L7 46 L7 18 Z" fill="url(#lava)"/>
+  <path d="M26 22 L44 32 L26 42 Z" fill="#FFF5E6"/>
+</svg>

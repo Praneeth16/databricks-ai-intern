@@ -1,0 +1,27 @@
+name: nlp-text-classification
+version: 1.0.0
+summary: |
+  Evidence-first recipe for text classification (sentiment, topic, intent).
+  Stand up a strong cheap baseline (TF-IDF + linear, or a small pretrained
+  encoder) and reproduce its number BEFORE reaching for large transformers.
+  Use a stratified split, pick the right metric (macro-F1 for imbalance,
+  accuracy for balanced), treat class-imbalance handling and transformer
+  fine-tuning as ablations driven by `sweep`, and log every run via `experiment`.
+
+triggers:
+  # Matched (case-insensitive substring) against the task description and recent
+  # user turns. On a match, load this playbook via read_skill BEFORE writing code.
+  - "text classification"
+  - "sentiment"
+  - "NLP"
+  - "transformer fine-tune"
+  - "BERT"
+  - "sequence classification"
+  - "f1"
+  - "macro-f1"
+
+applies_when:
+  task_shape: classification
+  data_shape: text
+
+playbook: playbook.md

@@ -1,0 +1,40 @@
+# Auto-evaluation job triggered when a new model version lands in
+# ml_intern.agent.<name>. Uses MLflow Deployment Jobs (workflow trigger
+# pattern: register-model → fan out to evaluator → write score back as a
+# tag on the model version).
+#
+# The eval logic itself lives in scripts/eval_model.py — placeholder today;
+# replace with real evals (e.g. lm-eval-harness, custom holdout) once the
+# first finetune lands.
+
+resources:
+  jobs:
+    ml_intern_eval:
+      name: ml-intern-eval
+      tags:
+        ml_intern_purpose: model-eval
+      tasks:
+        - task_key: evaluate
+          spark_python_task:
+            python_file: ../scripts/eval_model.py
+            parameters:
+              - --model
+              - "{{job.parameters.model}}"
+              - --version
+              - "{{job.parameters.version}}"
+          environment_key: eval_env
+      environments:
+        - environment_key: eval_env
+          spec:
+            client: "1"
+            dependencies:
+              - mlflow[databricks]>=2.21
+      parameters:
+        - name: model
+          default: ml_intern.agent.placeholder
+        - name: version
+          default: "1"
+      # MLflow Deployment Job triggers (fire on every new UC model version)
+      # are configured via the MLflow API, not yet via Asset Bundles. After
+      # bundle deploy, run scripts/wire_eval_trigger.py to bind this job to
+      # ``${var.uc_catalog}.${var.uc_schema}.*``.
