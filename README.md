@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/public/logo.svg" alt="Databricks AI Intern logo" width="120" />
+  <img src="frontend/public/databricks-logo.svg" alt="Databricks" width="90" />
 </p>
 
 <h1 align="center">Databricks AI Intern</h1>
