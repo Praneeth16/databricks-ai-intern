@@ -183,7 +183,7 @@ budget: { max_cost_usd: 25.0, max_iterations: 30 }
 - [ ] Phase 3 — Hypothesis generator + critic
 - [ ] Phase 4 — Wire loop + evidence-first skills
 - [x] Phase 5 — Observability + reliability (PR #21: tracing LLM/tool spans wired into the loop; compaction aggressive-retry; effort-probe no silent drift)
-- [~] Phase 7 — Custom LLM Serving + deployment strategy. **Build-step 2 done:** `agent/core/serving_strategy.py` (pure size-driven VRAM/TP/precision math + `render_entrypoint` baking the opencv-FIPS/fork/`bash -lc` fixes) + **24 unit tests**. Math reproduces both FE verdicts (Qwen3-4B fits 1×A10 TP=1; Qwen3.5-27B-FP8 overflows one A10 → escalate to single H100, fallback TP=4 on A10×4). Reference example NOT vendored (knowledge in this plan; agent generates entrypoints at runtime). **Codex review (1 P0 + 3 P1) applied:** (P0) quantized precisions are no longer free runtime flags — `quant_source` ∈ native/online/artifact/build; AWQ/GPTQ/int8 require an existing artifact or `allow_quantization_build`, only fp8 is online-capable (vLLM dynamic), `--quantization` emitted online-only (native/artifact auto-detected); (P1) explicit empty capability → no configs (was "all GPUs"); (P1) `est_max_concurrent_seqs` from KV budget + `max_num_seqs` clamp; (P1) T4 default-excluded (opt-in), explicit `objective` ∈ balanced/cost_first/accuracy_first/latency_first. Also: TP head-divisibility gate (`num_kv_heads % tp`), `shlex.quote` on entrypoint paths. **Deferred refinements (low-risk):** MoE total-vs-active params, GiB-vs-GB, quantized-KV cache. **Next:** `model_serving_tool.py` (probe/plan/build_and_register/deploy-REST/query/benchmark), skill playbook, ledger deployment rows, Lakeview panel.
+- [~] Phase 7 — Custom LLM Serving + deployment strategy. **Build-step 2 done:** `agent/core/serving_strategy.py` (pure size-driven VRAM/TP/precision math + `render_entrypoint` baking the opencv-FIPS/fork/`bash -lc` fixes) + **24 unit tests**. Math reproduces both FE verdicts (Qwen3-4B fits 1×A10 TP=1; Qwen3.5-27B-FP8 overflows one A10 → escalate to single H100, fallback TP=4 on A10×4). Reference example NOT vendored (knowledge in this plan; agent generates entrypoints at runtime). **Codex review (1 P0 + 3 P1) applied:** (P0) quantized precisions are no longer free runtime flags — `quant_source` ∈ native/online/artifact/build; AWQ/GPTQ/int8 require an existing artifact or `allow_quantization_build`, only fp8 is online-capable (vLLM dynamic), `--quantization` emitted online-only (native/artifact auto-detected); (P1) explicit empty capability → no configs (was "all GPUs"); (P1) `est_max_concurrent_seqs` from KV budget + `max_num_seqs` clamp; (P1) T4 default-excluded (opt-in), explicit `objective` ∈ balanced/cost_first/accuracy_first/latency_first. Also: TP head-divisibility gate (`num_kv_heads % tp`), `shlex.quote` on entrypoint paths. **Deferred refinements (low-risk):** MoE total-vs-active params, GiB-vs-GB, quantized-KV cache. **Build-step 3 done (codex-planned):** `agent/tools/model_serving_tool.py` — spine ops `plan_deployment` (→ feasible set + canonical plan objects with `plan_hash`), `deploy` (REST `wc.api_client.do`, fixed ×4 concurrency, no autoscale; create/update; readiness poll), `query` (429 backoff), `list`/`delete`/`probe_serving` (confidence-rated), `_record_deployment` (ExperimentRow). plan_hash contract enforced (`_validate_plan` recomputes; tamper → error). Registered in `tools.py`; `_needs_approval` gates build/deploy/benchmark/delete. **16 tool tests** (registration, approval, plan_hash tamper, deploy golden body, create/update, 429 retry, ledger row) — 40 serving tests total, full unit suite 437 pass (3 pre-existing model_catalog failures unrelated). **Next (build-step 4):** `build_and_register` (serverless-GPU build script + artifact validation + local vLLM smoke + `env_pack` register) + `benchmark` (live load) — best landed with a workspace to validate; then skill playbook + Lakeview panel.
 - [x] Phase 6 — Deterministic loop runner (`agent/core/research_loop.py` + `research_loop` tool). Chains the primitives with explicit control flow (LLM out of the driver's seat): per-round generate→dedup→budget-clamp→sweep→reproduce-gate→accept→stop. Stop precedence budget>target>max_rounds>patience>exhausted. Codex reviewed the design (2 P0 + 3 P1 folded in: round-only cost accounting, pre-submission budget clamp via est_cost_per_variant, loop-local seen-set, parenthesized improvement check, pre-round stops, pluggable verify_fn). 16 unit tests + live 2-round loop over real serverless jobs (191s).
 
 ### Build log
@@ -401,6 +401,45 @@ Ops:
 
 Reuse `db_client`, OBO for user-scoped deploys, secrets via `{{secrets/scope/key}}`, no plaintext
 creds in entrypoint.
+
+### Tool-layer design (codex-planned, build-step 3)
+- **One tool, `operation` enum** (matches `sweep_tool`/`research_loop_tool`). Handler returns the
+  repo's `{"formatted", "isError"}` dict (NOT a tuple). Read-only: `plan_deployment`, `query`,
+  `list`, `probe_serving` (shallow). Mutating/approval-gated: `build_and_register`, `deploy`,
+  `delete`, `benchmark`, `probe_serving(deep=true)`.
+- **`plan_hash` contract — enforce the deterministic boundary.** `plan_deployment` returns a
+  *canonical plan object* (model_facts, serving_config, served/registered names, source_model,
+  extra_pip_requirements=version pins, entrypoint, `plan_hash`=sha256 of canonical JSON).
+  `build_and_register` REQUIRES that object and recomputes the hash — the agent may not
+  hand-assemble `workload_type`/`precision`/`entrypoint` at build time.
+- **REST via `wc.api_client.do`**, not raw urllib (centralizes OBO/SDK auth): `POST
+  /api/2.0/serving-endpoints` (create), `PUT …/{name}/config` (update). Body uses `served_entities`
+  + `min_provisioned_concurrency == max_provisioned_concurrency` + `scale_to_zero_enabled=false`.
+  Never `EndpointCoreConfigInput` (its defaults force autoscaling, which entrypoint endpoints reject).
+- **`build_and_register` (riskiest — artifact lifecycle).** Renders a build script run as a
+  `databricks_jobs` `kind="serverless_gpu"` (reuse `_resolve_or_stage_script(as_notebook=True)`,
+  `_build_submit_body`, `_wait_for_run`, `_fetch_run_output`; track run_id for cancel). The script:
+  pin vLLM/transformers (+ autoawq/llmcompressor only for `quant_source="build"`, needs a calibration
+  set → fail closed if missing) → download weights → [quantize] → validate artifact (config, tokenizer,
+  precision, manifest hash) → **local vLLM smoke** (`/invocations` non-empty) → `log_model` placeholder
+  `ChatModel` + metadata `{task, entrypoint, plan_hash, manifest}` → `register_model(env_pack=
+  "databricks_model_serving")` → emit `SERVING_BUILD_RESULT_B64=<b64-json>` sentinel
+  (registered_model_name, version, mlflow_run_id, pins, smoke_passed). **Honest TP caveat:** exact
+  TP=4 smoke needs a 4-GPU build box; if built on 1×H100, mark `partial_tp_mismatch` + require
+  post-deploy smoke + cleanup-on-failure — not "proof."
+- **Ledger:** record each deployment as an `ExperimentRow` (method=`custom_llm_serving`, config=plan,
+  metric=benchmark primary e.g. `p95_latency_ms`/`tokens_per_second`, artifacts=full metadata). New
+  table only later if Lakeview needs time-series.
+- **probe_serving** can't truly enumerate serving capability → confidence-rated: `serving_endpoints.list()`
+  shows API visibility + already-used workload types; otherwise return `GPU_TIERS` defaults tagged
+  `source="assumed"`; H100 enrollment `unknown` until observed/deployed. `deep=true` may submit a tiny
+  GPU probe (mutating, gated).
+- **query** retries HTTP 429 with jitter/`Retry-After`. **delete** never auto-approves.
+- **Build order:** spine first (skeleton + `plan_deployment` + `deploy` REST + `query`/`list`/`delete`
+  + probe + ledger + tests, all offline-testable) → then `build_and_register` + `benchmark` (the
+  GPU-build piece, best landed with a workspace to live-test). Bites: MLflow ≥3.12 pin for `env_pack`,
+  HF license/egress, vLLM/transformers pin drift, TP-smoke≠serving topology, OBO UC/Serving perms,
+  logs vanishing after a failed config.
 
 ### Close the loop / showcase
 Team fine-tunes (existing Mosaic AI path) → intern auto-deploys at the right size →

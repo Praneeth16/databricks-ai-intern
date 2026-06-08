@@ -118,6 +118,12 @@ def _needs_approval(
     if tool_name == "hf_to_uc":
         return True
 
+    # model_serving: planning/querying/listing are free; building (serverless GPU
+    # job), deploying (always-on GPU endpoint), benchmarking (load + cost), and
+    # deletion all consume real money or change durable serving state.
+    if tool_name == "model_serving":
+        return tool_args.get("operation") in {"build_and_register", "deploy", "benchmark", "delete"}
+
     return False
 
 

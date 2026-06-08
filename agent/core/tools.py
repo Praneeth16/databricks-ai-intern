@@ -44,6 +44,7 @@ from agent.tools.experiment_tool import EXPERIMENT_TOOL_SPEC, experiment_handler
 from agent.tools.sweep_tool import SWEEP_TOOL_SPEC, sweep_handler
 from agent.tools.critic_tool import CRITIC_TOOL_SPEC, critic_handler
 from agent.tools.research_loop_tool import RESEARCH_LOOP_TOOL_SPEC, research_loop_handler
+from agent.tools.model_serving_tool import MODEL_SERVING_TOOL_SPEC, model_serving_handler
 from agent.tools.web_search_tool import WEB_SEARCH_TOOL_SPEC, web_search_handler
 from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
 from agent.tools.repos_tool import REPOS_TOOL_SPEC, repos_handler
@@ -414,6 +415,13 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
             description=RESEARCH_LOOP_TOOL_SPEC["description"],
             parameters=RESEARCH_LOOP_TOOL_SPEC["parameters"],
             handler=research_loop_handler,
+        ),
+        # Custom LLM Serving — plan/build/deploy/query model serving endpoints.
+        ToolSpec(
+            name=MODEL_SERVING_TOOL_SPEC["name"],
+            description=MODEL_SERVING_TOOL_SPEC["description"],
+            parameters=MODEL_SERVING_TOOL_SPEC["parameters"],
+            handler=model_serving_handler,
         ),
     ]
 
