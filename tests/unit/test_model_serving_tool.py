@@ -201,6 +201,29 @@ async def test_delete_calls_sdk(monkeypatch):
     assert res["isError"] is False and wc.serving_endpoints.deleted == ["ep"]
 
 
+def test_poll_ready_does_not_false_positive_on_not_ready():
+    # "NOT_READY".endswith("READY") is True — the readiness check must compare the
+    # trailing enum token exactly, or a still-provisioning endpoint reads as READY.
+    class _State:
+        def __init__(self, ready, cfg=None):
+            self.ready, self.config_update = ready, cfg
+
+    class _EP:
+        def __init__(self, st):
+            self.state = st
+
+    def _wc(state):
+        return type("W", (), {"serving_endpoints": type("SE", (), {
+            "get": lambda self, n: _EP(state)})()})()
+
+    assert "READY" in mst._poll_ready(_wc(_State("EndpointStateReady.READY")), "ep",
+                                      timeout_s=5, interval_s=0)
+    # NOT_READY + a failed config update must NOT report READY.
+    msg = mst._poll_ready(_wc(_State("EndpointStateReady.NOT_READY", "EndpointStateConfigUpdate.UPDATE_FAILED")),
+                          "ep", timeout_s=5, interval_s=0)
+    assert "FAILED" in msg and "is READY" not in msg
+
+
 @pytest.mark.asyncio
 async def test_probe_serving_reports_tiers(monkeypatch):
     _patch_context(monkeypatch, _FakeWC())
@@ -232,6 +255,9 @@ def test_render_build_script_has_pins_smoke_register_sentinel():
     assert mst._BUILD_SENTINEL in script
     assert "Application startup complete" in script  # local smoke gate
     assert plan["plan_hash"] in script
+    # Regression guards for bugs found in live validation:
+    assert "/v1/chat/completions" in script   # smoke hits the stock vLLM route, NOT /invocations
+    assert "dbutils.notebook.exit" in script  # results flow via notebook_output, not stdout
 
 
 def test_build_accelerator_sizing():

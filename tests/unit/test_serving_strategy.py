@@ -200,12 +200,16 @@ def _cfg(**o):
     return ss.ServingConfig(**base)
 
 
-def test_entrypoint_plain_for_single_gpu_fp16():
+def test_entrypoint_always_uninstalls_opencv_even_for_plain_fp16():
+    # FIPS-enabled Databricks GPU runtimes crash on opencv during vLLM model
+    # inspection regardless of precision (live-confirmed), so the uninstall is
+    # unconditional. Single-GPU fp16 still skips the TP fork.
     ep = render_entrypoint(_cfg(), artifacts_path="qwen3", served_model_name="qwen")
-    assert ep.startswith("python -u -m vllm.entrypoints.openai.api_server")
-    assert "bash -lc" not in ep and "opencv" not in ep
+    assert ep.startswith("bash -lc ")
+    assert "opencv-python" in ep
+    assert "VLLM_WORKER_MULTIPROC_METHOD=fork" not in ep   # TP=1
     assert "--tensor-parallel-size" not in ep and "--quantization" not in ep
-    assert "--dtype float16" in ep
+    assert "--dtype float16" in ep and "exec python -u -m vllm" in ep
 
 
 def test_entrypoint_bakes_tp_opencv_fork_for_native_fp8_tp4():
@@ -230,14 +234,17 @@ def test_entrypoint_emits_quantization_flag_only_for_online_fp8():
     assert "bash -lc" in ep2                  # but still needs the opencv fix
 
 
-def test_entrypoint_fork_without_opencv_for_bf16_tp4():
+def test_entrypoint_bf16_tp4_has_both_fork_and_opencv():
     cfg = _cfg(precision="bf16", quant_source="native", tensor_parallel_size=4,
                workload_type="MULTIGPU_MEDIUM")
     ep = render_entrypoint(cfg, artifacts_path="m", served_model_name="x")
     assert "VLLM_WORKER_MULTIPROC_METHOD=fork" in ep
-    assert "opencv" not in ep
+    assert "opencv-python" in ep            # opencv fix is now unconditional
 
 
 def test_entrypoint_shell_quotes_paths():
+    # Path + served name carry a space; they must survive shell-quoting. (The
+    # whole command is bash -lc wrapped, so the inner quoting is escaped, but the
+    # raw substrings remain contiguous.)
     ep = render_entrypoint(_cfg(), artifacts_path="/Volumes/c s/m", served_model_name="a b")
-    assert "'/Volumes/c s/m'" in ep and "'a b'" in ep
+    assert "/Volumes/c s/m" in ep and "a b" in ep

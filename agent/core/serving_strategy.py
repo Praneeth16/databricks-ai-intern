@@ -338,17 +338,14 @@ def render_entrypoint(
         base += ["--quantization", prec.online_quant_flag]
     cmd = " ".join(base)
 
-    needs_opencv_fix = prec.is_quant
-    needs_fork = cfg.tensor_parallel_size > 1
-    if not (needs_opencv_fix or needs_fork):
-        return cmd
-
-    prefix = ""
-    if needs_opencv_fix:
-        # opencv's bundled libcrypto aborts a FIPS self-test on `import gguf`
-        # (the quantized path); text inference doesn't need cv2.
-        prefix += "python -m pip uninstall -y opencv-python-headless opencv-python >/dev/null 2>&1 || true; "
-    if needs_fork:
+    # opencv's bundled libcrypto aborts a FIPS self-test (`crypto/fips/fips.c:154:
+    # FATAL FIPS SELFTEST FAILURE`) when vLLM imports it during model inspection,
+    # crashing the server on FIPS-enabled Databricks GPU runtimes REGARDLESS of
+    # precision (live-confirmed on a bf16 model — not just the quantized/gguf path).
+    # Text inference doesn't need cv2, so always uninstall it. Vision/multimodal
+    # models would need an opt-out.
+    prefix = "python -m pip uninstall -y opencv-python-headless opencv-python >/dev/null 2>&1 || true; "
+    if cfg.tensor_parallel_size > 1:
         # fork avoids a libstdc++ CXXABI mismatch in the TP>1 worker subprocess.
         prefix += "VLLM_WORKER_MULTIPROC_METHOD=fork "
     return "bash -lc " + shlex.quote(f"{prefix}exec {cmd}")
