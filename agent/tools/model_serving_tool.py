@@ -23,20 +23,35 @@ autoscaling, so the body uses a fixed ``min==max`` provisioned concurrency
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import logging
+import re
+import statistics
 import time
-from typing import Any
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from typing import Any, Callable
 
 from agent.core import db_client
 from agent.core import serving_strategy as ss
 from agent.core.serving_strategy import ModelFacts, ServingConfig, feasible_configs, render_entrypoint
-from agent.tools.sweep_tool import _get_ledger, _load_default_config
+from agent.tools.databricks_jobs_tool import _JOBS_SUBMIT_PATH
+from agent.tools.sweep_tool import _get_jobs_tool, _get_ledger, _load_default_config
 
 logger = logging.getLogger(__name__)
 
+# The MLflow artifact key the weights are logged under; Serving runs vLLM with
+# --model pointed at this path, so the entrypoint and log_model must agree on it.
+_ARTIFACT_KEY = "model"
+_LOCAL_SMOKE_PORT = 3080  # serverless-GPU notebooks allow ports 3000-3999
+_BENCH_PROMPT = "Write a detailed multi-paragraph explanation of how transformers work."
+
 _BUILD_SENTINEL = "SERVING_BUILD_RESULT_B64="
+_BUILD_RESULT_RE = re.compile(rf"^{re.escape(_BUILD_SENTINEL)}([A-Za-z0-9+/=]+)\s*$", re.MULTILINE)
 # vLLM/transformers pins couple to the model architecture (FE: 4B→0.11.2/4.57.6,
 # Qwen3.5→0.19.1/5.5.4). These are the conservative defaults; the agent overrides
 # per arch via ``extra_pip_requirements`` in the plan.
@@ -124,11 +139,10 @@ async def model_serving_handler(
             return _ok(_delete(arguments, session))
         if op == "probe_serving":
             return _ok(_probe_serving(session))
-        if op in ("build_and_register", "benchmark"):
-            # Increment 2 — the serverless-GPU build script + live load test land
-            # with a workspace to validate against (see plan.md Phase 7 build order).
-            return _err(f"{op} is not implemented yet (Phase 7 build-step 4). "
-                        f"plan_deployment + deploy + query are available now.")
+        if op == "build_and_register":
+            return _ok(await _build_and_register(arguments, session))
+        if op == "benchmark":
+            return _ok(_benchmark(arguments, session))
         return _err(f"unknown operation {op!r}.")
     except _ToolError as e:
         return _err(str(e))
@@ -180,8 +194,8 @@ def _plan_deployment(args: dict[str, Any]) -> str:
 def _make_plan(cfg: ServingConfig, args: dict[str, Any], model: ModelFacts) -> dict[str, Any]:
     """A canonical, hashable deployment plan derived from one ServingConfig."""
     served = args.get("served_model_name") or "served_model"
-    artifacts_path = args.get("source_model") or "<source_model>"
-    entrypoint = render_entrypoint(cfg, artifacts_path=artifacts_path, served_model_name=served)
+    # The served entrypoint points at the logged artifact dir, NOT the HF source.
+    entrypoint = render_entrypoint(cfg, artifacts_path=_ARTIFACT_KEY, served_model_name=served)
     plan = {
         "serving_config": _config_to_dict(cfg),
         "model_facts": _facts_to_dict(model),
@@ -368,6 +382,319 @@ def _record_deployment(
         artifacts={"plan": plan, "endpoint": endpoint_name, **(extra or {})},
     )
     return exp_id
+
+
+# --- build_and_register (serverless-GPU job) ---------------------------------
+
+async def _build_and_register(args: dict[str, Any], session: Any) -> str:
+    plan = _validate_plan(args.get("plan"))
+    source = plan.get("source_model")
+    registered = plan.get("registered_model_name") or args.get("registered_model_name")
+    if not source or source == "<source_model>":
+        raise _ToolError("plan.source_model (HF repo id, UC URI, or /Volumes path) is required.")
+    if not registered:
+        raise _ToolError("a three-level registered_model_name (<cat>.<schema>.<model>) is required.")
+    cfg = plan["serving_config"]
+    if cfg["quant_source"] == "build" and not args.get("calibration_dataset"):
+        # AWQ/GPTQ/int8 quantization needs calibration data — fail closed rather
+        # than silently produce a low-quality artifact.
+        raise _ToolError("serving_config.quant_source='build' requires a calibration_dataset "
+                         "(AWQ/GPTQ/int8 calibration). Provide one or pick a native/online precision.")
+
+    script = _render_build_script(plan, registered)
+    jobs_tool = await _get_jobs_tool(session)
+    accelerator = args.get("build_accelerator") or _build_accelerator_for(cfg)
+    output = await _submit_gpu_build(
+        jobs_tool, script=script, hardware_accelerator=accelerator,
+        dependencies=plan.get("extra_pip_requirements"), timeout=args.get("timeout", "2h"),
+    )
+    result = _parse_build_result(output)
+    _validate_build_result(plan, result)
+
+    topology = "exact (TP=1)" if cfg["tensor_parallel_size"] == 1 else \
+        f"partial — smoked at TP=1 on the build GPU, serves at TP={cfg['tensor_parallel_size']}"
+    lines = [
+        f"Built + registered {result['registered_model_name']} v{result['model_version']}.",
+        f"  precision={cfg['precision']}/{cfg['quant_source']}, build GPU={accelerator}, "
+        f"vLLM smoke {'PASSED' if result.get('smoke_passed') else 'FAILED'} ({topology}).",
+        f"  pins: {', '.join(plan.get('extra_pip_requirements', []))}",
+        f"  plan_hash {plan['plan_hash'][:12]} (verified). Deploy with operation=deploy, "
+        f"endpoint_name=<name>, model_version={result['model_version']}, the same plan.",
+    ]
+    if cfg["tensor_parallel_size"] > 1:
+        lines.append("  NOTE: TP>1 serving topology was not smoke-tested on the build box — "
+                     "watch the first deploy's logs and delete on crash-loop.")
+    return "\n".join(lines)
+
+
+def _build_accelerator_for(cfg: dict[str, Any]) -> str:
+    """Pick a serverless-GPU build accelerator big enough to load the model once.
+
+    The build only needs to load weights + run a TP=1 smoke; serving topology
+    (TP) lives in the entrypoint metadata, not the build box. Approximate the
+    full-model footprint from the per-GPU estimate × serving TP.
+    """
+    full_gb = cfg.get("est_vram_per_gpu_gb", 0) * cfg.get("tensor_parallel_size", 1)
+    return "GPU_1xA10" if full_gb < 22 else "GPU_1xH100"
+
+
+async def _submit_gpu_build(
+    jobs_tool: Any, *, script: str, hardware_accelerator: str,
+    dependencies: list[str] | None, timeout: str,
+) -> str:
+    """Stage + run the build notebook on serverless GPU; return its stdout.
+
+    Reuses DatabricksJobsTool's async building blocks (same path as sweep_jobs)
+    so env filtering / serverless task shape / retry-aware output picking aren't
+    duplicated.
+    """
+    job_args: dict[str, Any] = {
+        "kind": "serverless_gpu",
+        "script": script,
+        "filename": f"serving_build_{uuid.uuid4().hex[:12]}.py",
+        "hardware_accelerator": hardware_accelerator,
+        "timeout": timeout,
+    }
+    if dependencies:
+        job_args["dependencies"] = dependencies
+    ws_path = await jobs_tool._resolve_or_stage_script(job_args, as_notebook=True)
+    body = await jobs_tool._build_submit_body(job_args, ws_path, "serverless_gpu")
+    resp = await asyncio.to_thread(
+        jobs_tool.wc.api_client.do, "POST", _JOBS_SUBMIT_PATH, body=body
+    )
+    run_id = resp.get("run_id")
+    if not run_id:
+        raise _ToolError(f"runs/submit returned no run_id: {resp}")
+    run = await jobs_tool._wait_for_run(run_id)
+    state = run.get("state") or {}
+    if state.get("result_state") != "SUCCESS":
+        raise _ToolError(
+            f"build run {run_id} ended "
+            f"{state.get('result_state') or state.get('life_cycle_state')!r}: "
+            f"{state.get('state_message') or '—'}. Read the Serving/Jobs UI logs."
+        )
+    return await jobs_tool._fetch_run_output(run)
+
+
+def _parse_build_result(output: str) -> dict[str, Any]:
+    m = _BUILD_RESULT_RE.search(output or "")
+    if not m:
+        raise _ToolError(f"no '{_BUILD_SENTINEL}<b64>' sentinel in build output "
+                         f"({len(output or '')} chars) — the build likely failed before registering.")
+    try:
+        return json.loads(base64.b64decode(m.group(1)).decode())
+    except Exception as e:  # noqa: BLE001
+        raise _ToolError(f"could not decode build result sentinel: {e}")
+
+
+def _validate_build_result(plan: dict[str, Any], result: dict[str, Any]) -> None:
+    if result.get("plan_hash") != plan["plan_hash"]:
+        raise _ToolError("build result plan_hash does not match the plan — refusing to trust it.")
+    if not result.get("smoke_passed"):
+        raise _ToolError("the local vLLM smoke test did not pass — not registering for deploy.")
+    if not result.get("registered_model_name") or not result.get("model_version"):
+        raise _ToolError(f"build result missing registered_model_name/model_version: {result}")
+
+
+def _render_build_script(plan: dict[str, Any], registered: str) -> str:
+    """Render the serverless-GPU build notebook source.
+
+    Downloads weights → (optional quantize) → validates the artifact → runs a
+    LOCAL vLLM smoke test (TP=1) → logs a placeholder ChatModel whose metadata
+    carries the real serving entrypoint → registers a Serverless Optimized
+    Deployment to UC → prints a base64 result sentinel. Injected values are
+    JSON-encoded so entrypoint strings (which contain quotes) embed safely.
+    """
+    cfg = plan["serving_config"]
+    served = plan.get("served_model_name", "served_model")
+    smoke_cfg = replace(_reconstruct_cfg(cfg), tensor_parallel_size=1)
+    smoke_ep = render_entrypoint(smoke_cfg, artifacts_path=_ARTIFACT_KEY,
+                                 served_model_name=served, serving_port=_LOCAL_SMOKE_PORT)
+    pins = plan.get("extra_pip_requirements") or list(_DEFAULT_PINS)
+    return f'''# Databricks notebook source
+# Auto-generated by model_serving.build_and_register — Custom LLM Serving (SOD) build.
+import base64, hashlib, json, os, subprocess, tempfile, time
+import requests
+
+SOURCE_MODEL = {json.dumps(plan["source_model"])}
+ARTIFACTS_PATH = {json.dumps(_ARTIFACT_KEY)}
+SERVED_NAME = {json.dumps(served)}
+REGISTERED_NAME = {json.dumps(registered)}
+SERVING_ENTRYPOINT = {json.dumps(plan["entrypoint"])}
+SMOKE_ENTRYPOINT = {json.dumps(smoke_ep)}
+PLAN_HASH = {json.dumps(plan["plan_hash"])}
+PINS = {json.dumps(pins)}
+LOCAL_PORT = {_LOCAL_SMOKE_PORT}
+
+os.chdir(tempfile.mkdtemp())  # /Workspace can't hold large weights
+
+# 1) Materialize weights at ARTIFACTS_PATH (HF id -> download; local/Volume -> reuse).
+if os.path.isdir(SOURCE_MODEL):
+    if os.path.abspath(SOURCE_MODEL) != os.path.abspath(ARTIFACTS_PATH):
+        os.symlink(SOURCE_MODEL, ARTIFACTS_PATH)
+else:
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+    from huggingface_hub import snapshot_download
+    snapshot_download(repo_id=SOURCE_MODEL, local_dir=ARTIFACTS_PATH)
+
+# 2) Validate the artifact + manifest hash.
+assert os.path.exists(os.path.join(ARTIFACTS_PATH, "config.json")), "no config.json in artifact"
+names = sorted(os.listdir(ARTIFACTS_PATH))
+manifest = hashlib.sha256(
+    "".join(f"{{n}}:{{os.path.getsize(os.path.join(ARTIFACTS_PATH, n))}}" for n in names).encode()
+).hexdigest()
+
+# 3) Local vLLM smoke test (TP=1) against the rendered smoke entrypoint.
+log = open("vllm.log", "w")
+proc = subprocess.Popen(["bash", "-lc", SMOKE_ENTRYPOINT], stdout=log,
+                        stderr=subprocess.STDOUT, start_new_session=True)
+smoke_passed = False
+try:
+    deadline = time.time() + 1500
+    ready = False
+    while time.time() < deadline:
+        if os.path.exists("vllm.log") and "Application startup complete" in open("vllm.log").read():
+            ready = True
+            break
+        if proc.poll() is not None:
+            break
+        time.sleep(5)
+    if ready:
+        r = requests.post(f"http://localhost:{{LOCAL_PORT}}/invocations",
+                          json={{"messages": [{{"role": "user", "content": "Hello"}}], "max_tokens": 16}},
+                          timeout=120)
+        smoke_passed = r.status_code == 200 and bool(
+            (r.json().get("choices") or [{{}}])[0].get("message", {{}}).get("content")
+        )
+finally:
+    subprocess.run(["pkill", "-f", "vllm.entrypoints.openai.api_server"])
+assert smoke_passed, "vLLM local smoke test failed — see vllm.log"
+
+# 4) Log placeholder ChatModel (Serving runs the entrypoint, not predict) + register SOD.
+import mlflow
+from mlflow.pyfunc.model import ChatModel, ChatCompletionResponse
+
+class LLMModel(ChatModel):
+    def predict(self, context, messages, params):
+        return ChatCompletionResponse.from_dict({{"choices": []}})
+
+info = mlflow.pyfunc.log_model(
+    name=SERVED_NAME, python_model=LLMModel(), artifacts={{"model_dir": ARTIFACTS_PATH}},
+    metadata={{"task": "llm/v1/chat", "entrypoint": SERVING_ENTRYPOINT,
+              "plan_hash": PLAN_HASH, "artifact_manifest_sha256": manifest}},
+    extra_pip_requirements=PINS,
+)
+mlflow.set_registry_uri("databricks-uc")
+mv = mlflow.register_model(info.model_uri, REGISTERED_NAME, env_pack="databricks_model_serving")
+
+import vllm, transformers
+result = {{
+    "registered_model_name": REGISTERED_NAME, "model_version": str(mv.version),
+    "mlflow_run_id": info.run_id, "plan_hash": PLAN_HASH,
+    "artifact_manifest_sha256": manifest, "smoke_passed": bool(smoke_passed),
+    "vllm_version": vllm.__version__, "transformers_version": transformers.__version__,
+}}
+print("{_BUILD_SENTINEL}" + base64.b64encode(json.dumps(result).encode()).decode())
+'''
+
+
+def _reconstruct_cfg(d: dict[str, Any]) -> ServingConfig:
+    return ServingConfig(
+        workload_type=d["workload_type"], tensor_parallel_size=d["tensor_parallel_size"],
+        precision=d["precision"], quant_source=d["quant_source"], max_model_len=d["max_model_len"],
+        gpu_memory_utilization=d["gpu_memory_utilization"], max_num_seqs=d["max_num_seqs"],
+        provisioned_concurrency=d["provisioned_concurrency"], est_vram_per_gpu_gb=d["est_vram_per_gpu_gb"],
+        vram_headroom_gb=d["vram_headroom_gb"], est_max_concurrent_seqs=d["est_max_concurrent_seqs"],
+        quality_delta_pct=d["quality_delta_pct"], est_cost_per_hr_usd=d["est_cost_per_hr_usd"],
+        fits=True, notes=tuple(d.get("notes", [])),
+    )
+
+
+# --- benchmark (concurrency sweep) -------------------------------------------
+
+def _benchmark(args: dict[str, Any], session: Any) -> str:
+    endpoint = args.get("endpoint_name")
+    if not endpoint:
+        raise _ToolError("benchmark requires endpoint_name.")
+    levels = [int(c) for c in (args.get("concurrency_levels") or [1, 4, 8, 16])]
+    max_tokens = int(args.get("max_tokens", 128))
+    _settings, wc = _context(session)
+    one = _make_request_fn(wc, endpoint, max_tokens)
+
+    rows = []
+    for c in levels:
+        results, wall = _run_level(one, c)
+        rows.append(_summarize_sweep(results, wall, c))
+
+    primary = max((r["sys_tps"] or 0.0 for r in rows), default=0.0)
+    plan = args.get("plan")
+    note = ""
+    if isinstance(plan, dict) and "serving_config" in plan:
+        try:
+            exp_id = _record_deployment(
+                session, plan=plan, endpoint_name=endpoint,
+                model_version=str(args.get("model_version", "")),
+                metric_name="tokens_per_second", metric_value=primary,
+                extra={"benchmark": rows},
+            )
+            note = f"\nRecorded to ledger as {exp_id}."
+        except Exception as e:  # noqa: BLE001 — benchmarking still succeeds if ledger is down
+            logger.debug("benchmark ledger record failed: %s", e)
+
+    header = f"Benchmark of {endpoint!r} (peak {primary:.0f} tok/s):"
+    table = ["  C   ok  429   sys_tps  p50_lat  p95_lat  mean_tok"]
+    for r in rows:
+        table.append(f"  {r['C']:<3} {r['ok']:<3} {r['http429']:<4} "
+                     f"{(r['sys_tps'] or 0):>8.1f}  {_s(r['p50_lat'])}  {_s(r['p95_lat'])}  "
+                     f"{r['mean_tok'] or 0:>8}")
+    table.append("(non-streaming: TTFT/TPOT need a streaming client — future.)")
+    return header + "\n" + "\n".join(table) + note
+
+
+def _make_request_fn(wc: Any, endpoint: str, max_tokens: int) -> Callable[[], dict]:
+    path = f"/serving-endpoints/{endpoint}/invocations"
+    body = {"messages": [{"role": "user", "content": _BENCH_PROMPT}],
+            "max_tokens": max_tokens, "temperature": 0}
+
+    def one() -> dict:
+        t0 = time.perf_counter()
+        try:
+            resp = wc.api_client.do("POST", path, body=dict(body))
+            tokens = ((resp or {}).get("usage") or {}).get("completion_tokens", 0)
+            return {"ok": True, "total": time.perf_counter() - t0, "tokens": tokens}
+        except Exception as e:  # noqa: BLE001
+            code = 429 if "429" in str(e) else "ERR"
+            return {"ok": False, "total": time.perf_counter() - t0, "code": code}
+
+    return one
+
+
+def _run_level(request_fn: Callable[[], dict], c: int) -> tuple[list[dict], float]:
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=c) as ex:
+        results = list(ex.map(lambda _: request_fn(), range(c)))
+    return results, time.perf_counter() - t0
+
+
+def _summarize_sweep(results: list[dict], wall: float, level: int) -> dict[str, Any]:
+    oks = [r for r in results if r.get("ok")]
+    lats = sorted(r["total"] for r in oks)
+    tot_tokens = sum(r.get("tokens", 0) for r in oks)
+    n429 = sum(1 for r in results if r.get("code") == 429)
+
+    def pct(a: list[float], q: float):
+        return round(a[min(len(a) - 1, int(q * (len(a) - 1)))], 2) if a else None
+
+    return {
+        "C": level, "ok": len(oks), "http429": n429,
+        "sys_tps": round(tot_tokens / wall, 1) if wall > 0 else None,
+        "p50_lat": pct(lats, 0.5), "p95_lat": pct(lats, 0.95),
+        "mean_tok": round(tot_tokens / len(oks)) if oks else 0,
+    }
+
+
+def _s(v) -> str:
+    return f"{v:>7.2f}" if v is not None else "      -"
 
 
 # --- helpers -----------------------------------------------------------------

@@ -8,6 +8,7 @@ Phase 7 build-step 4 and are integration-gated.
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -208,13 +209,110 @@ async def test_probe_serving_reports_tiers(monkeypatch):
     assert "GPU_XLARGE" in res["formatted"] and "GPU_MEDIUM" in res["formatted"]
 
 
-# --- not-yet-implemented + unknown -------------------------------------------
+# --- build_and_register ------------------------------------------------------
+
+def _build_sentinel(plan, *, version="7", smoke=True, hash_override=None):
+    result = {
+        "registered_model_name": plan["registered_model_name"], "model_version": version,
+        "mlflow_run_id": "run-1", "plan_hash": hash_override or plan["plan_hash"],
+        "artifact_manifest_sha256": "abc", "smoke_passed": smoke,
+        "vllm_version": "0.11.2", "transformers_version": "4.57.6",
+    }
+    b64 = base64.b64encode(json.dumps(result).encode()).decode()
+    return f"...job log...\n{mst._BUILD_SENTINEL}{b64}\n...more log...\n"
+
+
+def test_render_build_script_has_pins_smoke_register_sentinel():
+    plan = _plan()
+    script = mst._render_build_script(plan, plan["registered_model_name"])
+    assert "snapshot_download" in script and plan["source_model"] in script
+    assert 'env_pack="databricks_model_serving"' in script
+    assert '"task": "llm/v1/chat"' in script and '"entrypoint": SERVING_ENTRYPOINT' in script
+    assert '"plan_hash": PLAN_HASH' in script
+    assert mst._BUILD_SENTINEL in script
+    assert "Application startup complete" in script  # local smoke gate
+    assert plan["plan_hash"] in script
+
+
+def test_build_accelerator_sizing():
+    small = {"est_vram_per_gpu_gb": 10.0, "tensor_parallel_size": 1}
+    big = {"est_vram_per_gpu_gb": 9.0, "tensor_parallel_size": 4}  # full ≈ 36 GB
+    assert mst._build_accelerator_for(small) == "GPU_1xA10"
+    assert mst._build_accelerator_for(big) == "GPU_1xH100"
+
+
+def test_parse_and_validate_build_result():
+    plan = _plan()
+    out = _build_sentinel(plan)
+    result = mst._parse_build_result(out)
+    assert result["model_version"] == "7"
+    mst._validate_build_result(plan, result)  # ok
+
+    with pytest.raises(mst._ToolError):
+        mst._parse_build_result("no sentinel here")
+    with pytest.raises(mst._ToolError):  # smoke failed
+        mst._validate_build_result(plan, mst._parse_build_result(_build_sentinel(plan, smoke=False)))
+    with pytest.raises(mst._ToolError):  # hash mismatch
+        mst._validate_build_result(plan, mst._parse_build_result(_build_sentinel(plan, hash_override="deadbeef")))
+
 
 @pytest.mark.asyncio
-async def test_build_and_benchmark_not_implemented():
-    for op in ("build_and_register", "benchmark"):
-        res = await mst.model_serving_handler({"operation": op})
-        assert res["isError"] is True and "not implemented" in res["formatted"]
+async def test_build_and_register_happy_path(monkeypatch):
+    plan = _plan()
+
+    async def fake_jobs(session):
+        return object()
+
+    async def fake_submit(jobs_tool, **kwargs):
+        assert kwargs["hardware_accelerator"] in ("GPU_1xA10", "GPU_1xH100")
+        return _build_sentinel(plan, version="9")
+
+    monkeypatch.setattr(mst, "_get_jobs_tool", fake_jobs)
+    monkeypatch.setattr(mst, "_submit_gpu_build", fake_submit)
+    res = await mst.model_serving_handler({"operation": "build_and_register", "plan": plan})
+    assert res["isError"] is False
+    assert "v9" in res["formatted"] and "PASSED" in res["formatted"]
+
+
+@pytest.mark.asyncio
+async def test_build_requires_source_and_registered():
+    no_source = _plan(source_model=None)
+    res = await mst.model_serving_handler({"operation": "build_and_register", "plan": no_source})
+    assert res["isError"] is True and "source_model" in res["formatted"]
+
+
+@pytest.mark.asyncio
+async def test_build_quant_build_needs_calibration():
+    plan = _plan()
+    plan["serving_config"]["quant_source"] = "build"
+    plan["plan_hash"] = mst._plan_hash(plan)  # re-hash after tampering so validation passes
+    res = await mst.model_serving_handler({"operation": "build_and_register", "plan": plan})
+    assert res["isError"] is True and "calibration_dataset" in res["formatted"]
+
+
+# --- benchmark ---------------------------------------------------------------
+
+def test_summarize_sweep_math():
+    results = [{"ok": True, "total": 1.0, "tokens": 100},
+               {"ok": True, "total": 2.0, "tokens": 100},
+               {"ok": False, "total": 0.1, "code": 429}]
+    row = mst._summarize_sweep(results, wall=2.0, level=3)
+    assert row["C"] == 3 and row["ok"] == 2 and row["http429"] == 1
+    assert row["sys_tps"] == 100.0  # 200 tokens / 2.0s wall
+    assert row["mean_tok"] == 100
+
+
+@pytest.mark.asyncio
+async def test_benchmark_runs_sweep(monkeypatch):
+    class _BenchWC:
+        class _Api:
+            def do(self, method, path, body=None):
+                return {"choices": [{"message": {"content": "x"}}], "usage": {"completion_tokens": 50}}
+        api_client = _Api()
+    monkeypatch.setattr(mst, "_context", lambda s: (None, _BenchWC()))
+    res = await mst.model_serving_handler(
+        {"operation": "benchmark", "endpoint_name": "ep", "concurrency_levels": [1, 2]})
+    assert res["isError"] is False and "sys_tps" in res["formatted"]
 
 
 @pytest.mark.asyncio
