@@ -183,6 +183,7 @@ budget: { max_cost_usd: 25.0, max_iterations: 30 }
 - [ ] Phase 3 — Hypothesis generator + critic
 - [ ] Phase 4 — Wire loop + evidence-first skills
 - [x] Phase 5 — Observability + reliability (PR #21: tracing LLM/tool spans wired into the loop; compaction aggressive-retry; effort-probe no silent drift)
+- [~] Phase 7 — Custom LLM Serving + deployment strategy. **Build-step 2 done:** `agent/core/serving_strategy.py` (pure size-driven VRAM/TP/precision math + `render_entrypoint` baking the opencv-FIPS/fork/`bash -lc` fixes) + **24 unit tests**. Math reproduces both FE verdicts (Qwen3-4B fits 1×A10 TP=1; Qwen3.5-27B-FP8 overflows one A10 → escalate to single H100, fallback TP=4 on A10×4). Reference example NOT vendored (knowledge in this plan; agent generates entrypoints at runtime). **Codex review (1 P0 + 3 P1) applied:** (P0) quantized precisions are no longer free runtime flags — `quant_source` ∈ native/online/artifact/build; AWQ/GPTQ/int8 require an existing artifact or `allow_quantization_build`, only fp8 is online-capable (vLLM dynamic), `--quantization` emitted online-only (native/artifact auto-detected); (P1) explicit empty capability → no configs (was "all GPUs"); (P1) `est_max_concurrent_seqs` from KV budget + `max_num_seqs` clamp; (P1) T4 default-excluded (opt-in), explicit `objective` ∈ balanced/cost_first/accuracy_first/latency_first. Also: TP head-divisibility gate (`num_kv_heads % tp`), `shlex.quote` on entrypoint paths. **Deferred refinements (low-risk):** MoE total-vs-active params, GiB-vs-GB, quantized-KV cache. **Next:** `model_serving_tool.py` (probe/plan/build_and_register/deploy-REST/query/benchmark), skill playbook, ledger deployment rows, Lakeview panel.
 - [x] Phase 6 — Deterministic loop runner (`agent/core/research_loop.py` + `research_loop` tool). Chains the primitives with explicit control flow (LLM out of the driver's seat): per-round generate→dedup→budget-clamp→sweep→reproduce-gate→accept→stop. Stop precedence budget>target>max_rounds>patience>exhausted. Codex reviewed the design (2 P0 + 3 P1 folded in: round-only cost accounting, pre-submission budget clamp via est_cost_per_variant, loop-local seen-set, parenthesized improvement check, pre-round stops, pluggable verify_fn). 16 unit tests + live 2-round loop over real serverless jobs (191s).
 
 ### Build log
@@ -214,3 +215,214 @@ align #248, stale tool error badges #247, `/resume` #233, session YOLO budget #2
 3. **[UX, M] `/clear` + `/new` CLI commands (#256 `021580f`).** Fresh conversation,
    keep warm sandbox/model cache. One adaptation: HF dataset-upload detach →
    Lakebase/UC session persistence.
+
+---
+
+## Improvement backlog — SOTA-shaped search loop  *(codex consult + web research, 2026-06-08)*
+
+Diagnosis (codex + MLE-STAR/AIDE/Operand-Quant survey): **execution is solid, the
+search policy is flat.** The loop consumes whatever `hypothesis_source` emits,
+sweeps, keeps best — no tree, no ablation. MLE-STAR (64% MLE-bench-Lite medal vs
+AIDE ~17%) gets its edge from *ablation-guided targeted refinement*, not breadth.
+All file claims below verified against the repo.
+
+**Tier 1 — highest leverage**
+
+1. **[search policy, M] Ablation-guided refinement.** Add `agent/core/search_policy.py`:
+   seed baseline → ablate named blocks (val-split, feature block, model family,
+   hyperparams, ensemble) → pick the highest-marginal-lift block → generate children
+   *only* in that block → repeat to budget/patience. Reuses ledger `parent_id`
+   (already in schema, line 114/193). This is the MLE-STAR advantage without a
+   fragile general planner. **Single highest-ROI unlock.**
+2. **[hypothesis gen, M] Wire Phase 3 as structured extraction, not prose.**
+   `agent/core/hypothesis.py` (`generate_hypotheses`) exists but is referenced by
+   *nothing but itself* — stranded. Add a `hypothesis_generate` tool: structured
+   `Finding[]` → `generate_hypotheses` → dedup vs ledger → sweep-ready rows. Make
+   `research_tool` optionally emit JSON findings. (Second to #1 — good seeds still
+   need targeted refinement.)
+3. **[ledger, S] Flat rows → experiment lineage.** Schema stores `parent_id`,
+   source paper/section, expected/actual metric, artifacts, MLflow run id — but the
+   public API is only `list_for_task` / `best_for_task` / exact-config dedup. Add
+   `children()`, `lineage()`, `best_by_block()`, `find_similar_across_tasks(dataset_fingerprint,…)`.
+   The last = **cross-session learning** (today each task restarts cold).
+
+**Tier 2 — make "numbers go up" real + the showcase land**
+
+4. **[eval, M] Real eval + leaderboard stop.** `scripts/eval_model.py` literally
+   writes `eval=placeholder`; the Kaggle task yaml has placeholder data paths. Wire
+   `research_loop` to `EvalTask` (metric direction, baseline, human ceiling, LB
+   percentile, max iters/cost). "Numbers go up" = *rank improved under budget*, not
+   "stdout float rose."
+5. **[showcase, M] Make the Databricks moat visible.** The differentiator AIDE/MLE-STAR
+   *cannot* copy: governed, observable, workspace-native autonomous experimentation
+   (UC Delta ledger + Jobs fanout + UC Volumes + MLflow traces + Model Registry +
+   system billing). But `resources/lakeview_dashboard.yml.disabled` is OFF and Jobs
+   carry **no billing tags**. Enable Lakeview, tag jobs, surface: hypothesis tree,
+   metric-over-time, repro gaps, spend, accept/reject decisions, model lineage.
+
+**Tier 3 — cheap robustness**
+
+6. **[robustness, S] Sweep scoring durability.** Metric contract depends on Databricks
+   stdout capture. Write `/Volumes/…/sweep_results/<id>.json` + `mlflow.log_metric`;
+   stdout sentinel = fallback only; reject conflicting sentinels; record metric source.
+7. **[robustness, S] Budget = launched compute, not scored results.** `sweep.py`
+   submits all jobs then budget-gates *scoring* — money already spent. Require cost
+   estimates, add `max_concurrent`, cancel unscored jobs after the cap is hit.
+
+**Cut / defer.** Ouroboros/Darwin-Gödel self-rewriting (optimizes vibes without a
+real eval harness — defer behind #4). Multi-agent pipeline gen (Jobs already give
+reliable parallelism; the gap is search policy, not more agents). More prose
+playbook rules — convert to executable checks or don't add.
+
+---
+
+## Phase 7 — Custom LLM Serving + Autonomous Deployment Strategy  *(net-new; large team unlock)*
+
+**Why.** Databricks recently shipped **Custom LLM Serving** (vLLM-backed, OpenAI-compatible
+`/invocations`) — host any HF / fine-tuned / PEFT / multimodal model not in the
+Foundation Model API. Teams that fine-tune today get stuck on *hosting*: which GPU,
+what precision, will it fit, what does it cost. The intern should **figure this out**
+— pick deployment size + precision/quantization + scaling from workspace capability,
+model facts, task, and the team's accuracy/latency/cost priorities. **Not a lookup
+table — a reasoned decision over a feasible set computed by deterministic math.**
+Mirrors the existing split: mechanism is code, judgment is the agent's.
+
+> **FE reference code — GROUND TRUTH (explored 2026-06-08).** A working FE-team
+> implementation (`custom_llm_serving.zip`, file `F0B7Y3RLS10`, channel `sme-ai-apj`)
+> was unzipped + read: `README.md`, `REPORT.md`, `create_endpoint.py`, `benchmark.py`,
+> `notebooks/serve_qwen3_4b.py`, `notebooks/serve_qwen35_27b_fp8.py`. **Action: vendor
+> into `examples/custom-llm-serving/`** as the canonical reference. The mechanics below
+> are corrected against it — the public docs were materially incomplete (they describe a
+> `workload_size`/`scale_to_zero` autoscaling path that the **entrypoint-based** deploy
+> actually rejects).
+
+### Native surface (corrected against FE code — this is the **SOD / entrypoint** path)
+- **Endpoint** = UC registered model, but the MLflow artifact is a **placeholder** `ChatModel`
+  (predict returns `{}`). Serving runs the **`entrypoint` command string** from MLflow
+  `metadata={"task":"llm/v1/chat","entrypoint": "<vllm launch cmd>"}` — *not* `python_model.predict`.
+  Registered with **`mlflow.register_model(..., env_pack="databricks_model_serving")`** (builds
+  the **Serverless Optimized Deployment**). MLflow ≥ 3.12, port **8080**.
+- **The entrypoint string is the entire adaptation surface** — GPU/TP sizing, dtype, dep quirks,
+  worker-process env all live there (`bash -lc '...; exec python -m vllm.entrypoints.openai.api_server …'`).
+- **`workload_type`** (from FE, richer than docs): `GPU_MEDIUM` (1×A10, 24 GB) ·
+  **`MULTIGPU_MEDIUM` (4×A10, 96 GB → `--tensor-parallel-size 4`)** · (docs also list `GPU_SMALL`
+  1×T4 / `GPU_XLARGE` 1×H100, **available to us**; serverless-GPU **build jobs** expose
+  `GPU_1xH100`). **Selection is size-driven, smallest-GPU-that-fits:** model fits A10 → stay on
+  A10 (cheapest, single-GPU); too big for A10 → escalate to a single **H100 (GPU_XLARGE)**; too
+  big for one H100 → fall back to **A10×4 tensor-parallel (`MULTIGPU_MEDIUM`)**. H100 is the
+  escalation step for big models, **not a default**. (The FE notebooks used A10×4 only because
+  H100 wasn't in their workspace — a workspace constraint, not the canonical pattern; the
+  notebooks are reference for the *mechanics*, not the deploy default.)
+- **NO autoscaling for entrypoint endpoints.** Config (via **REST** `/api/2.0/serving-endpoints`,
+  *not* the SDK's autoscaling-default `EndpointCoreConfigInput`):
+  `min_provisioned_concurrency == max_provisioned_concurrency`, **multiple of 4 (min 4)**,
+  `scale_to_zero_enabled=False`. Fixed, always-on capacity → size to peak, budget continuous GPU cost.
+- **`provisioned_concurrency` is an ADMISSION CEILING, not the batch size.** vLLM continuous-batches
+  far beyond it (4B: batched ~32 concurrent at provisioned=4); exceeding it → **HTTP 429
+  "Too many parallel requests"** → clients need retry/backoff. Scale by raising in multiples of 4.
+- **vLLM entrypoint args** (seen in FE): `--dtype`, `--max-model-len`, `--gpu-memory-utilization`,
+  `--tensor-parallel-size`, `--max-num-seqs` (batch cap). FP8 model uses `--dtype bfloat16` (compute
+  dtype; weights FP8 on disk).
+- **Observability**: live vLLM logs, Prometheus `/metrics`, logs+metrics to UC Delta. **Caveat: logs
+  API serves only the ACTIVE config** — a fully-failed deploy returns "does not exist with config
+  version 0"; read Serving-UI service logs or poll *during* the crash-loop.
+
+### Build/serve split + non-obvious requirements (from FE REPORT.md — encode as intern knowledge)
+- **Build/register MUST run on a GPU job** (serverless GPU / AI Runtime) — registering on plain
+  (non-GPU) serverless yields a non-SOD artifact the endpoint rejects ("...only supported with
+  Serverless Optimized Deployments"). Big models: build on **1×H100** (fast TP=1 load test) → **serve
+  on A10×4 TP=4**.
+- **Non-network-restricted workspace** required for register (serverless can't fetch UC temp storage
+  creds when restricted → `PERMISSION_DENIED`).
+- **Gotcha table (each cost FE real debugging):**
+  1. **opencv FIPS crash** — vLLM 0.19.1 → `import gguf` (FP8 path) → opencv's bundled libcrypto fails
+     FIPS self-test, aborts model server (exitCode=1). **Fix: `pip uninstall -y opencv-python-headless
+     opencv-python` *inside the entrypoint*** before launching vLLM (text inference needs no cv2).
+  2. **TP>1 worker crash** — `libstdc++ CXXABI not found` on EngineCore workers. **Fix:
+     `VLLM_WORKER_MULTIPROC_METHOD=fork`** in the entrypoint.
+  3. **Shell wrap** — entrypoint must be `bash -lc '...'` so the uninstall + env-vars run before
+     `exec python` (robust whether runtime argv-execs or shell-execs).
+  4. **Version coupling** — vLLM/transformers pins track model architecture (4B: vllm 0.11.2 / tf
+     4.57.6; Qwen3.5-27B: vllm 0.19.1 / tf 5.5.4). New arch ⇒ bump runtime; carry pins in
+     `extra_pip_requirements`.
+
+### Design — deterministic mechanism vs agent judgment
+
+**A. `agent/core/serving_strategy.py`** — pure, tested, no Databricks contact:
+- `estimate_vram(params, dtype_bytes, max_model_len, kv_dtype, concurrency, hidden, layers, tp)` → GB
+  *per GPU*. Weights = `params × bytes/param` (fp16/bf16=2, fp8/int8=1, int4=0.5), **divided by `tp`**;
+  KV cache ≈ `2 × layers × max_model_len × hidden × kv_bytes × concurrency / tp`; + ~15–20 %
+  activation/fragmentation overhead; respect `--gpu-memory-utilization` headroom.
+- `feasible_configs(model_facts, workspace_caps, accuracy_budget, latency_budget, cost_budget)`
+  → **ranked list**, each entry = `(workload_type, tensor_parallel_size, precision/quant,
+  max_model_len, gpu_mem_util, max_num_seqs, provisioned_concurrency)` that *fit per-GPU after TP
+  split*, annotated: fits?, per-GPU VRAM headroom, expected quality-delta band, est $/hr (always-on
+  — no scale-to-zero), cold-start risk. **`provisioned_concurrency` snapped to a multiple of 4.**
+  When a model doesn't fit one GPU, emit a **tensor-parallel** option (e.g. `MULTIGPU_MEDIUM` TP=4)
+  rather than only escalating single-GPU size.
+- `render_entrypoint(cfg, artifacts_path, served_name)` → the `bash -lc '…'` string, auto-including
+  the opencv-uninstall + `VLLM_WORKER_MULTIPROC_METHOD=fork` (when TP>1) fixes. This is the exact
+  contract Serving executes.
+- **Precision ⨯ hardware coupling** (data table the planner reads, NOT agent prose):
+  - **H100 / GPU_XLARGE (Hopper):** fp16/bf16 baseline; **fp8 (W8A8)** ~2× throughput, <1 %
+    loss; hosts ~13B fp16 / ~70B fp8.
+  - **A10 / GPU_MEDIUM (Ampere):** fp16 ≤ ~7B; **AWQ / GPTQ-Marlin int4** for ~13B; **no fp8**.
+  - **T4 / GPU_SMALL (Turing):** small only; AWQ/GPTQ int4 ≤ ~7B; no fp8/bf16 (fp16 ok).
+  - Accuracy budget → allowed precision set: tight → fp16/bf16 (≈0 loss) → fp8 (<1 %) →
+    AWQ/GPTQ int4 (1–3 %, 4× memory cut) → bitsandbytes (experiment). vLLM refs:
+    AWQ/GPTQ (Turing+), Marlin (fastest GPTQ/AWQ/FP8 kernel), FP8 (Ada/Hopper only).
+
+**B. Agent judgment (the intern reasons — do NOT hard-bake):**
+- Gather inputs: model size/arch (UC model metadata / HF `config.json`), team's stated
+  accuracy expectation + latency/throughput target + cost ceiling, **workspace capability
+  probe** (which `workload_type`s exist, region for H100, enrollment).
+- Pick from the feasible set per priorities: accuracy-first → fp16 on the biggest GPU that
+  fits; cost-first → smallest GPU + int4 + scale-to-zero; latency-first → enough replicas,
+  higher gpu-mem-util, `--enforce-eager` off.
+- Deploy → smoke-query → benchmark → record. **Deployment is a ledger experiment**
+  (model version → config → latency p50/p99, tokens/s, $/1k-tok, quality-delta-vs-fp16).
+
+### New tool — `agent/tools/model_serving_tool.py`  *(approval-gated — spins GPU $$)*
+Ops:
+- `probe_serving` — capability probe (which `workload_type`s incl. `MULTIGPU_*` exist, region/
+  enrollment, workspace network-restricted?). Mirror `databricks_sandbox.probe_compute` cascade.
+- `plan_deployment` — → `serving_strategy.feasible_configs`, returns ranked set + rationale.
+- `build_and_register` — stage the **build/register notebook on a GPU job** (download weights →
+  local vLLM smoke test → `mlflow.pyfunc.log_model` placeholder `ChatModel` + `entrypoint` metadata →
+  `register_model(env_pack="databricks_model_serving")`). Reuse `databricks_jobs_tool` serverless-GPU
+  path. **Must be a GPU job + non-restricted workspace** (see gotchas).
+- `deploy` — create endpoint via **REST** `/api/2.0/serving-endpoints` with fixed
+  `min==max provisioned_concurrency` (×4), `scale_to_zero_enabled=False` (the SDK default path is wrong).
+- `query` — smoke `/invocations` (OpenAI-compatible chat).
+- `benchmark` — **vendor `examples/custom-llm-serving/benchmark.py`**: concurrency sweep →
+  sys_tps, p50/p95 lat, **TTFT** (the RAG/interactive metric — degrades under load from prefill
+  queuing), TPOT, eff_decode_C, http429.
+- `list` / `delete`.
+
+Reuse `db_client`, OBO for user-scoped deploys, secrets via `{{secrets/scope/key}}`, no plaintext
+creds in entrypoint.
+
+### Close the loop / showcase
+Team fine-tunes (existing Mosaic AI path) → intern auto-deploys at the right size →
+benchmarks → if accuracy within the team's budget at int4, keeps the cheaper config.
+"Numbers go up" extends to serving: **$/token down, latency down, accuracy held.**
+Deployment trials feed the Lakeview dashboard (ties into backlog #5).
+
+### Skill — `skills/llm-serving-deployment/playbook.md`  *(evidence-first)*
+Deploy fp16 baseline → measure quality + latency + cost → step one precision down →
+measure delta → keep only if quality within the team's budget. Never trust a precision
+choice without measuring (same discipline as the ablation rule).
+
+### Build order
+1. **Vendor** `examples/custom-llm-serving/` (FE reference — 6 files) as canonical ground truth.
+2. `serving_strategy.py` — VRAM/TP/precision math + `render_entrypoint` (offline-testable).
+   Validate `estimate_vram` against the two known FE points: Qwen3-4B fits 1×A10 (TP=1);
+   Qwen3.5-27B-FP8 (~27 GB) needs TP=4 across A10×4 — the math must reproduce that verdict.
+3. `model_serving_tool.py` — probe → plan → build_and_register → deploy (REST, fixed ×4) →
+   query → benchmark (reuse FE `benchmark.py`) → list/delete.
+4. `skills/llm-serving-deployment/playbook.md` (evidence-first + the 4 gotchas baked in).
+5. Ledger deployment rows → Lakeview panel ($/tok, TTFT, accepted config).
+
+Tests: VRAM/TP math vs the two FE model/GPU pairs, feasibility gating (precision⨯hardware,
+single-GPU vs TP), entrypoint renders the opencv/fork/bash-lc fixes, provisioned_concurrency
+snaps to ×4, capability-probe fallback, deploy/query mocked.
