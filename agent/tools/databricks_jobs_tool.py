@@ -88,6 +88,11 @@ _TERMINAL_LIFECYCLES = {
     "TERMINATED", "INTERNAL_ERROR", "SKIPPED", "BLOCKED",
 }
 
+# Consecutive runs/get failure ceiling for _wait_for_run. No total-duration
+# cap — multi-hour training jobs are legitimate — but a poll that never
+# succeeds again should surface instead of retrying forever.
+_MAX_CONSECUTIVE_POLL_FAILURES = 20
+
 # Auth / cloud-creds the agent must NEVER set directly. Caught even when the
 # LLM emits ``DATABRICKS_TOKEN: "$DATABRICKS_TOKEN"`` thinking it's a passthrough.
 _AUTH_VAR_BLOCKLIST = {
@@ -251,7 +256,16 @@ def _wrap_user_script_with_stdout_capture(script: str) -> str:
     """
     if "dbutils.notebook.exit" in script:
         return script
+    import ast
     import textwrap
+    try:
+        ast.parse(script)
+    except SyntaxError as e:
+        raise ValueError(
+            f"script is not valid Python (line {e.lineno}: {e.msg}); "
+            "fix the syntax error before submitting — the notebook stdout "
+            "wrapper can't safely indent an unparseable script."
+        ) from e
     return (
         "try:\n"
         + textwrap.indent(script, "    ")
@@ -651,8 +665,15 @@ class DatabricksJobsTool:
         await asyncio.to_thread(_do)
 
     async def _wait_for_run(self, run_id: int | str) -> Dict[str, Any]:
-        """Poll runs/get until terminal lifecycle. Cancels on session abort."""
+        """Poll runs/get until terminal lifecycle. Cancels on session abort.
+
+        Transient poll failures retry indefinitely only up to
+        ``_MAX_CONSECUTIVE_POLL_FAILURES`` in a row — a successful poll resets
+        the counter, so multi-hour jobs are unaffected but a dead endpoint
+        can't spin forever.
+        """
         delay = 5
+        failures = 0
         while True:
             if self.session is not None and self.session.is_cancelled:
                 try:
@@ -670,10 +691,20 @@ class DatabricksJobsTool:
                     query={"run_id": run_id},
                 )
             except Exception as e:
-                logger.warning("runs/get failed (retry): %s", e)
+                failures += 1
+                if failures >= _MAX_CONSECUTIVE_POLL_FAILURES:
+                    raise RuntimeError(
+                        f"runs/get failed {failures} times consecutively "
+                        f"for run_id={run_id}; giving up. Last error: {e}"
+                    ) from e
+                logger.warning(
+                    "runs/get failed (retry %d/%d): %s",
+                    failures, _MAX_CONSECUTIVE_POLL_FAILURES, e,
+                )
                 await asyncio.sleep(delay)
                 continue
 
+            failures = 0
             life = (run.get("state") or {}).get("life_cycle_state") or "PENDING"
             if life in _TERMINAL_LIFECYCLES:
                 return run

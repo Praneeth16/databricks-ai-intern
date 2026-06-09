@@ -64,6 +64,23 @@ async def test_uc_volume_rejects_non_volume_path():
 
 
 @pytest.mark.asyncio
+async def test_uc_volume_rejects_paths_that_normalize_outside_volumes():
+    tool = uc_volume_tools.UCVolumeTool(wc=MagicMock(), settings=_settings())
+    for bad in ("/Volumes/..", "/Volumes/.", "/Volumes/a/../../etc/passwd"):
+        out = await tool.execute({"operation": "ls", "path": bad})
+        assert out.get("isError"), bad
+
+
+@pytest.mark.asyncio
+async def test_uc_volume_allows_harmless_dot_segments():
+    wc = MagicMock()
+    wc.files.list_directory_contents.return_value = iter([])
+    tool = uc_volume_tools.UCVolumeTool(wc=wc, settings=_settings())
+    out = await tool.execute({"operation": "ls", "path": "/Volumes/cat/sch/vol/./sub"})
+    assert not out.get("isError")
+
+
+@pytest.mark.asyncio
 async def test_uc_volume_write_uploads_bytes():
     wc = MagicMock()
     tool = uc_volume_tools.UCVolumeTool(wc=wc, settings=_settings())
@@ -319,3 +336,57 @@ async def test_repos_delete_calls_delete():
     out = await tool.execute({"operation": "delete", "repo_id": 7})
     assert not out.get("isError")
     wc.repos.delete.assert_called_once_with(repo_id=7)
+
+
+# ---------------------------------------------------------------------------
+# shared handler plumbing (agent.tools.shared)
+# ---------------------------------------------------------------------------
+
+
+def test_handlers_share_single_workspace_resolution():
+    from agent.tools import model_serving_tool, shared, sweep_tool
+
+    for mod in (hf_to_uc_tool, repos_tool, uc_dataset_tools, uc_model_tools, uc_volume_tools):
+        assert mod.get_session_workspace_client is shared.get_session_workspace_client
+    assert sweep_tool._get_ledger is shared._get_ledger
+    assert sweep_tool._get_jobs_tool is shared._get_jobs_tool
+    assert model_serving_tool._get_ledger is shared._get_ledger
+    assert model_serving_tool._get_jobs_tool is shared._get_jobs_tool
+    assert model_serving_tool._load_default_config is shared._load_default_config
+
+
+def test_get_session_workspace_client_prefers_obo(monkeypatch):
+    from agent.tools import shared
+
+    obo_wc, sp_wc = object(), object()
+    monkeypatch.setattr(db_client, "resolve_settings", lambda cfg: _settings())
+    monkeypatch.setattr(db_client, "get_workspace_client_for_user", lambda token, host: obo_wc)
+    monkeypatch.setattr(db_client, "get_workspace_client", lambda settings: sp_wc)
+
+    session = MagicMock()
+    session.config = {"databricks": {}}
+    session.databricks_user_token = "obo-token"
+    wc, settings, token = shared.get_session_workspace_client(session)
+    assert wc is obo_wc
+    assert token == "obo-token"
+    assert settings.host == "https://ws"
+
+    session.databricks_user_token = None
+    wc, _, token = shared.get_session_workspace_client(session)
+    assert wc is sp_wc
+    assert token is None
+
+
+@pytest.mark.asyncio
+async def test_uc_volume_handler_uses_shared_resolution(monkeypatch):
+    wc = MagicMock()
+    wc.files.list_directory_contents.return_value = iter([])
+    monkeypatch.setattr(
+        uc_volume_tools, "get_session_workspace_client",
+        lambda session: (wc, _settings(), None),
+    )
+    formatted, ok = await uc_volume_tools.uc_volume_handler(
+        {"operation": "ls", "path": "/Volumes/cat/sch/vol"}, session=None,
+    )
+    assert ok
+    wc.files.list_directory_contents.assert_called_once()

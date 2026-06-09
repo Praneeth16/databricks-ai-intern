@@ -40,7 +40,7 @@ from agent.core import db_client
 from agent.core import serving_strategy as ss
 from agent.core.serving_strategy import ModelFacts, ServingConfig, feasible_configs, render_entrypoint
 from agent.tools.databricks_jobs_tool import _JOBS_SUBMIT_PATH
-from agent.tools.sweep_tool import _get_jobs_tool, _get_ledger, _load_default_config
+from agent.tools.shared import _get_jobs_tool, _get_ledger, _load_default_config
 
 logger = logging.getLogger(__name__)
 

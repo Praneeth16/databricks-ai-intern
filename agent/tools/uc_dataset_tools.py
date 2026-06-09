@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 from typing import Any, Dict, Optional
 
 from agent.core import db_client
+from agent.tools.shared import get_session_workspace_client
 from agent.tools.types import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -176,25 +176,10 @@ UC_DATASET_TOOL_SPEC = {
 async def uc_inspect_dataset_handler(arguments: Dict[str, Any], session: Any = None,
                                      tool_call_id: str | None = None) -> tuple[str, bool]:
     try:
-        cfg = session.config if session and getattr(session, "config", None) else _load_default_config()
-        settings = db_client.resolve_settings(cfg)
-        token = getattr(session, "databricks_user_token", None) if session else None
-        if token and settings.host:
-            wc = db_client.get_workspace_client_for_user(token, settings.host)
-        else:
-            wc = db_client.get_workspace_client(settings)
+        wc, settings, token = get_session_workspace_client(session)
         tool = UCDatasetTool(wc=wc, settings=settings, user_token=token)
         result = await tool.execute(arguments)
         return result["formatted"], not result.get("isError", False)
     except Exception as e:
         logger.exception("uc_inspect_dataset handler crashed")
         return f"Error: {e}", False
-
-
-def _load_default_config():
-    from agent.config import load_config
-    cfg_path = os.environ.get(
-        "DATABRICKS_AI_INTERN_CONFIG_PATH",
-        os.path.join(os.path.dirname(__file__), "..", "..", "configs", "main_agent_config.json"),
-    )
-    return load_config(cfg_path)

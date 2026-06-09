@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import io
-from unittest.mock import MagicMock, patch
+import logging
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -245,3 +246,91 @@ def test_call_tool_unknown():
     out = sb.call_tool("nope", {})
     assert not out.success
     assert "Unknown tool" in out.error
+
+
+# ---------------------------------------------------------------------------
+# bash sync/async entry points
+# ---------------------------------------------------------------------------
+
+
+def test_bash_runs_via_asyncio_run_outside_event_loop():
+    sb = _make_sandbox()
+    with patch.object(
+        sb, "_run_python", new=AsyncMock(return_value=ds.ToolResult(True, output="ok")),
+    ) as rp:
+        out = sb.bash("echo hi")
+    assert out.success
+    assert out.output == "ok"
+    py = rp.call_args.args[0]
+    assert "subprocess.run" in py
+    assert "echo hi" in py
+
+
+@pytest.mark.asyncio
+async def test_bash_raises_inside_running_event_loop():
+    sb = _make_sandbox()
+    with pytest.raises(RuntimeError, match="bash_async"):
+        sb.bash("echo hi")
+
+
+@pytest.mark.asyncio
+async def test_bash_async_awaits_run_python():
+    sb = _make_sandbox()
+    with patch.object(
+        sb, "_run_python", new=AsyncMock(return_value=ds.ToolResult(True, output="ok")),
+    ):
+        out = await sb.bash_async("echo hi")
+    assert out.success
+
+
+# ---------------------------------------------------------------------------
+# cluster delete retry
+# ---------------------------------------------------------------------------
+
+
+def test_delete_retries_permanent_delete_once(monkeypatch):
+    wc = MagicMock()
+    state = {"attempts": 0}
+
+    def _do(method, path, **kwargs):
+        if path == "/api/2.1/clusters/permanent-delete":
+            state["attempts"] += 1
+            if state["attempts"] == 1:
+                raise Exception("transient")
+        return {}
+
+    wc.api_client.do.side_effect = _do
+    sb = _make_sandbox(wc)
+    monkeypatch.setattr(ds.time, "sleep", lambda s: None)
+    sb.delete()
+    assert state["attempts"] == 2
+
+
+def test_delete_logs_manual_cleanup_when_retry_fails(monkeypatch, caplog):
+    wc = MagicMock()
+
+    def _do(method, path, **kwargs):
+        if path == "/api/2.1/clusters/permanent-delete":
+            raise Exception("still broken")
+        return {}
+
+    wc.api_client.do.side_effect = _do
+    sb = _make_sandbox(wc)
+    monkeypatch.setattr(ds.time, "sleep", lambda s: None)
+    with caplog.at_level(logging.WARNING, logger="agent.tools.databricks_sandbox"):
+        sb.delete()
+    assert "manual cleanup required" in caplog.text
+    assert "c1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_safe_terminate_retries_then_warns(monkeypatch, caplog):
+    wc = MagicMock()
+    wc.api_client.do.side_effect = Exception("still broken")
+    compute = ds.ComputeChoice(kind="pool", cluster_id="c9", owns_cluster=True)
+    monkeypatch.setattr(ds.asyncio, "sleep", AsyncMock())
+    with caplog.at_level(logging.WARNING, logger="agent.tools.databricks_sandbox"):
+        await ds.DatabricksSandbox._safe_terminate(wc, compute)
+    assert wc.api_client.do.call_count == 2
+    assert "manual cleanup required" in caplog.text
+    assert "c9" in caplog.text

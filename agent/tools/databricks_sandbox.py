@@ -36,7 +36,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Callable, Optional
 
 from agent.core import db_client
 from agent.tools.databricks_jobs_tool import HARDWARE_FLAVOR_TO_NODE_TYPE
@@ -51,6 +51,7 @@ WAIT_INTERVAL_S = 5
 CLUSTER_WAIT_TIMEOUT_S = 600
 CONTEXT_WAIT_TIMEOUT_S = 120
 COMMAND_POLL_INTERVAL_S = 2
+CLUSTER_DELETE_RETRY_DELAY_S = 5
 
 OUTPUT_LIMIT = 25_000
 
@@ -342,12 +343,18 @@ class DatabricksSandbox:
         if not compute.owns_cluster:
             return
         try:
-            await asyncio.to_thread(
-                wc.api_client.do, "POST", "/api/2.1/clusters/permanent-delete",
-                body={"cluster_id": compute.cluster_id},
-            )
+            await asyncio.to_thread(_permanent_delete_cluster, wc, compute.cluster_id)
         except Exception as e:
-            logger.warning("cluster delete failed: %s", e)
+            logger.warning("cluster delete failed (retrying): %s", e)
+            await asyncio.sleep(CLUSTER_DELETE_RETRY_DELAY_S)
+            try:
+                await asyncio.to_thread(_permanent_delete_cluster, wc, compute.cluster_id)
+            except Exception as e2:
+                logger.warning(
+                    "cluster delete failed after retry; cluster_id=%s leaked — "
+                    "manual cleanup required: %s",
+                    compute.cluster_id, e2,
+                )
 
     def delete(self) -> None:
         """Terminate the cluster (if we created it) and discard the context."""
@@ -360,12 +367,18 @@ class DatabricksSandbox:
             logger.debug("context destroy suppressed: %s", e)
         if self.compute.owns_cluster:
             try:
-                self.wc.api_client.do(
-                    "POST", "/api/2.1/clusters/permanent-delete",
-                    body={"cluster_id": self.cluster_id},
-                )
+                _permanent_delete_cluster(self.wc, self.cluster_id)
             except Exception as e:
-                logger.warning("cluster delete failed: %s", e)
+                logger.warning("cluster delete failed (retrying): %s", e)
+                time.sleep(CLUSTER_DELETE_RETRY_DELAY_S)
+                try:
+                    _permanent_delete_cluster(self.wc, self.cluster_id)
+                except Exception as e2:
+                    logger.warning(
+                        "cluster delete failed after retry; cluster_id=%s leaked — "
+                        "manual cleanup required: %s",
+                        self.cluster_id, e2,
+                    )
 
     def __enter__(self) -> "DatabricksSandbox":
         return self
@@ -420,7 +433,7 @@ class DatabricksSandbox:
 
     # --- tool surface ------------------------------------------------------
 
-    def bash(
+    async def bash_async(
         self, command: str, *,
         work_dir: str | None = None, timeout: int | None = None,
         description: str | None = None,
@@ -438,8 +451,21 @@ class DatabricksSandbox:
             "    print(r.stderr, end='')\n"
             "print(f'__exit_code__={r.returncode}')\n"
         )
-        return asyncio.get_event_loop().run_until_complete(self._run_python(py, timeout)) \
-            if not _in_event_loop() else _sync_via_thread(self._run_python(py, timeout))
+        return await self._run_python(py, timeout)
+
+    def bash(
+        self, command: str, *,
+        work_dir: str | None = None, timeout: int | None = None,
+        description: str | None = None,
+    ) -> ToolResult:
+        if _in_event_loop():
+            raise RuntimeError(
+                "DatabricksSandbox.bash() called from a running event loop; "
+                "use `await bash_async(...)` instead."
+            )
+        return asyncio.run(
+            self.bash_async(command, work_dir=work_dir, timeout=timeout, description=description)
+        )
 
     def read(self, path: str, *, offset: int | None = None, limit: int | None = None) -> ToolResult:
         try:
@@ -588,6 +614,13 @@ class DatabricksSandbox:
         return fn(arguments)
 
 
+def _permanent_delete_cluster(wc: Any, cluster_id: str) -> None:
+    wc.api_client.do(
+        "POST", "/api/2.1/clusters/permanent-delete",
+        body={"cluster_id": cluster_id},
+    )
+
+
 # --- file IO helpers (Workspace Files vs UC Volumes) ------------------------
 
 
@@ -628,21 +661,3 @@ def _in_event_loop() -> bool:
         return True
     except RuntimeError:
         return False
-
-
-def _sync_via_thread(coro: Awaitable) -> Any:
-    """Run an awaitable from a sync function while another loop is running."""
-    import threading
-    box: dict = {}
-
-    def _runner():
-        loop = asyncio.new_event_loop()
-        try:
-            box["v"] = loop.run_until_complete(coro)
-        finally:
-            loop.close()
-
-    t = threading.Thread(target=_runner, daemon=True)
-    t.start()
-    t.join()
-    return box.get("v")

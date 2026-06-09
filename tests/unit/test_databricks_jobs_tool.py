@@ -384,6 +384,73 @@ async def test_resolve_or_stage_script_rejects_bad_filename():
         await tool._resolve_or_stage_script({"script": "x", "filename": "../evil.py"})
 
 
+@pytest.mark.asyncio
+async def test_notebook_wrap_rejects_syntactically_invalid_script():
+    """The stdout wrapper textwrap.indents the user script into a try block;
+    an unparseable script would land broken in the notebook. ast.parse
+    pre-check surfaces the syntax error before staging."""
+    tool = djt.DatabricksJobsTool(
+        wc=_mock_wc(), settings=_make_settings(), user_email="alice@ex.com",
+    )
+    tool.session = MagicMock()
+    tool.session.session_id = "s"
+    with pytest.raises(ValueError, match="not valid Python"):
+        await tool._resolve_or_stage_script(
+            {"script": "def broken(:\n    pass"}, as_notebook=True,
+        )
+
+
+def test_notebook_wrap_handles_triple_quoted_strings():
+    script = 'doc = """\nline one\n    line two\n"""\nprint(doc)'
+    wrapped = djt._wrap_user_script_with_stdout_capture(script)
+    compile(wrapped, "<wrapped>", "exec")
+
+
+# ---------------------------------------------------------------------------
+# _wait_for_run poll-failure ceiling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wait_for_run_raises_after_consecutive_poll_failures():
+    wc = _mock_wc()
+    wc.api_client.do.side_effect = Exception("endpoint down")
+    tool = djt.DatabricksJobsTool(wc=wc, settings=_make_settings())
+    with patch("asyncio.sleep", new=AsyncMock()):
+        with pytest.raises(RuntimeError, match="endpoint down"):
+            await tool._wait_for_run(123)
+    assert wc.api_client.do.call_count == djt._MAX_CONSECUTIVE_POLL_FAILURES
+
+
+@pytest.mark.asyncio
+async def test_wait_for_run_successful_poll_resets_failure_counter():
+    wc = _mock_wc()
+    fail_n = djt._MAX_CONSECUTIVE_POLL_FAILURES - 1
+    seq = (
+        ["fail"] * fail_n
+        + ["running"]
+        + ["fail"] * fail_n
+        + ["done"]
+    )
+    state = {"i": 0}
+
+    def _do(method, path, **kwargs):
+        kind = seq[state["i"]]
+        state["i"] += 1
+        if kind == "fail":
+            raise Exception("transient")
+        if kind == "running":
+            return {"state": {"life_cycle_state": "RUNNING"}}
+        return {"state": {"life_cycle_state": "TERMINATED", "result_state": "SUCCESS"}}
+
+    wc.api_client.do.side_effect = _do
+    tool = djt.DatabricksJobsTool(wc=wc, settings=_make_settings())
+    with patch("asyncio.sleep", new=AsyncMock()):
+        run = await tool._wait_for_run(123)
+    assert run["state"]["life_cycle_state"] == "TERMINATED"
+    assert state["i"] == len(seq)
+
+
 # ---------------------------------------------------------------------------
 # Finetune
 # ---------------------------------------------------------------------------
