@@ -10,7 +10,7 @@ Port is staged over 10 phases (see `.plan/` if present, or ask before deep work)
 
 | Concern | Native primitive |
 |---|---|
-| LLM | Foundation Model API + AI Gateway. LiteLLM prefix `databricks/`. No direct Bedrock/Anthropic. |
+| LLM | Foundation Model API serving endpoints via LiteLLM's native `databricks/` provider (auth auto-resolved from SDK chain). Mosaic AI Gateway applies transparently when enabled on the endpoint — not explicitly routed in code. No direct Bedrock/Anthropic. |
 | Job submission | Databricks Jobs API + Mosaic AI Model Training (`databricks-genai`) for fine-tune. |
 | Files | UC Volumes (`/Volumes/<cat>/<schema>/<vol>/…`) + Workspace Files (`/Workspace/Users/<u>/…`). |
 | Registry | UC registered models (`<cat>.<schema>.<name>`) via MLflow with `registry_uri=databricks-uc`. |

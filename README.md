@@ -21,7 +21,7 @@ workspace is the only backend, so data and compute never leave it.
 
 | Concern | Native primitive |
 |---|---|
-| **LLM inference** | Foundation Model API + AI Gateway (LiteLLM `databricks/` prefix). No direct Bedrock/Anthropic. |
+| **LLM inference** | Foundation Model API serving endpoints via LiteLLM's native `databricks/` provider (api_base + key auto-resolved from the SDK auth chain). Mosaic AI Gateway governance + usage logging apply transparently when enabled on the endpoint. No direct Bedrock/Anthropic. |
 | **Job submission** | Databricks Jobs API (`runs/submit`) + Mosaic AI Model Training (`databricks-genai`) for fine-tunes. |
 | **Files** | UC Volumes (`/Volumes/<cat>/<schema>/<vol>/…`) + Workspace Files. |
 | **Datasets** | Unity Catalog tables (read-only SQL via a SQL warehouse). |
