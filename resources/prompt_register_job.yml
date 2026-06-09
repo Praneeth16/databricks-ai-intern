@@ -18,6 +18,11 @@ resources:
           spark_python_task:
             python_file: ../scripts/register_prompt.py
             parameters:
+              # Schema comes from the deployed resource, not ${var.uc_schema} —
+              # dev mode prefixes the schema name, and the prompt must land in
+              # the schema that actually exists.
+              - --name
+              - "${var.uc_catalog}.${resources.schemas.databricks_ai_intern_agent.name}.system_prompt"
               - --commit-message
               - "bundle deploy"
           environment_key: prompt_register_env

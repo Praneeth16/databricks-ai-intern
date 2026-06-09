@@ -28,9 +28,18 @@ import yaml
 logger = logging.getLogger(__name__)
 
 _DEFAULT_NAME = "databricks_ai_intern.agent.system_prompt"
-_DEFAULT_FILE = (
-    Path(__file__).resolve().parent.parent / "agent" / "prompts" / "system_prompt_v3.yaml"
-)
+
+
+def _script_dir() -> Path:
+    # Serverless spark_python_task execs the file without ``__file__`` in
+    # globals; sys.argv[0] still carries the script path there.
+    try:
+        return Path(__file__).resolve().parent
+    except NameError:
+        return Path(sys.argv[0]).resolve().parent
+
+
+_DEFAULT_FILE = _script_dir().parent / "agent" / "prompts" / "system_prompt_v3.yaml"
 
 
 def _load_template(path: Path) -> str:
@@ -83,4 +92,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Serverless job runner execs this under IPython, which reports ANY
+    # SystemExit — including exit(0) — as a failed workload. Only exit
+    # non-zero.
+    _rc = main()
+    if _rc:
+        sys.exit(_rc)

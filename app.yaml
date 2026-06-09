@@ -30,7 +30,7 @@ env:
   - name: DATABRICKS_AI_INTERN_UC_CATALOG
     value: serverless_lakebase_praneeth_catalog
   - name: DATABRICKS_AI_INTERN_UC_SCHEMA
-    value: databricks_ai_intern_test
+    value: dev_praneeth_paikray_agent
   - name: DATABRICKS_WAREHOUSE_ID
     value: 4d39ac2e32b72a3a
   - name: DATABRICKS_AI_INTERN_LAKEBASE_INSTANCE

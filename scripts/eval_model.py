@@ -49,4 +49,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Serverless job runner execs this under IPython, which reports ANY
+    # SystemExit — including exit(0) — as a failed workload. Only exit
+    # non-zero.
+    _rc = main()
+    if _rc:
+        sys.exit(_rc)

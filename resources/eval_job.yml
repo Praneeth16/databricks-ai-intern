@@ -19,9 +19,9 @@ resources:
             python_file: ../scripts/eval_model.py
             parameters:
               - --model
-              - "{{job.parameters.model}}"
+              - "{{job.parameters.model_name}}"
               - --version
-              - "{{job.parameters.version}}"
+              - "{{job.parameters.model_version}}"
           environment_key: eval_env
       environments:
         - environment_key: eval_env
@@ -29,10 +29,13 @@ resources:
             client: "1"
             dependencies:
               - mlflow[databricks]>=2.21
+      # MLflow Deployment Jobs require these exact parameter names —
+      # binding a job without 'model_name'/'model_version' is rejected with
+      # INVALID_PARAMETER_VALUE.
       parameters:
-        - name: model
+        - name: model_name
           default: databricks_ai_intern.agent.placeholder
-        - name: version
+        - name: model_version
           default: "1"
       # MLflow Deployment Job triggers (fire on every new UC model version)
       # are configured via the MLflow API, not yet via Asset Bundles. After
