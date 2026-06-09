@@ -629,6 +629,10 @@ try:
         "vllm_version": vllm.__version__, "transformers_version": transformers.__version__,
     }})
 except Exception as e:
+    # dbutils.notebook.exit raises NotebookExit — the success _emit above lands
+    # here too. Let it propagate or the success payload is rewritten as failure.
+    if type(e).__name__ == "NotebookExit" or SENTINEL in str(e):
+        raise
     import traceback
     _emit({{"smoke_passed": False, "stage": "exception",
            "error": f"{{type(e).__name__}}: {{e}}", "traceback": traceback.format_exc()[-2000:],

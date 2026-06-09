@@ -73,7 +73,8 @@ cfg = SFTConfig(
 )
 
 print("Starting SFTTrainer...")
-trainer = SFTTrainer(model=model, args=cfg, train_dataset=ds, tokenizer=tok)
+# trl 0.13+ removed the tokenizer kwarg; processing_class works from 0.12.
+trainer = SFTTrainer(model=model, args=cfg, train_dataset=ds, processing_class=tok)
 trainer.train()
 
 final = trainer.state.log_history[-1] if trainer.state.log_history else {}
