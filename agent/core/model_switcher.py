@@ -88,8 +88,9 @@ def _print_routing_info(model_id: str, console) -> bool:
         )
         return True
 
-    # HF-router fallback path. Kept for users pasting HF model ids; will be
-    # removed once research-tool fallbacks finish migrating to Databricks.
+    # HF-router path — still live: users can paste HF router ids, and
+    # research-tool sub-calls inherit non-Anthropic main models verbatim.
+    # No routing info to print for these.
     return True
 
 

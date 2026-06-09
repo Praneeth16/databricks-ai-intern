@@ -1,5 +1,6 @@
 """Tests for the doom-loop detector — repeated/cycling tool call patterns."""
 
+import json
 from dataclasses import dataclass
 
 from agent.core.doom_loop import (
@@ -229,6 +230,34 @@ def test_check_for_doom_loop_quiet_when_args_meaningfully_differ():
         _assistant_call("read", '{"path": "/b.py"}'),
         _assistant_call("read", '{"path": "/c.py"}'),
     ]
+    assert check_for_doom_loop(msgs) is None
+
+
+def test_check_for_doom_loop_quiet_for_varying_hypothesis_id():
+    """Review-flagged false positive: the same tool called repeatedly with
+    only ``hypothesis_id`` changing must not count as repeats. Signatures
+    hash the full (normalised) arguments, so distinct-args runs stay
+    distinct for both detectors.
+    """
+    msgs = [
+        _assistant_call(
+            "experiment",
+            json.dumps({"operation": "run", "hypothesis_id": f"H{i}"}),
+        )
+        for i in range(6)
+    ]
+    assert check_for_doom_loop(msgs) is None
+
+
+def test_repeating_sequence_quiet_when_cycle_args_differ():
+    """An [experiment, read] cadence with fresh args each round is normal
+    iteration, not a doom loop."""
+    msgs = []
+    for i in range(3):
+        msgs.append(_assistant_call("experiment", f'{{"hypothesis_id": "H{i}"}}'))
+        msgs.append(_assistant_call("read", f'{{"path": "/results/{i}"}}'))
+    sigs = extract_recent_tool_signatures(msgs)
+    assert detect_repeating_sequence(sigs) is None
     assert check_for_doom_loop(msgs) is None
 
 

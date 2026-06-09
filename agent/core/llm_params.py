@@ -129,8 +129,9 @@ def _resolve_llm_params(
     can't crash a turn — it just doesn't get sent.
 
     Token precedence (first non-empty wins):
-      1. INFERENCE_TOKEN env — shared key on the hosted Space (inference is
-         free for users, billed to the Space owner via ``X-HF-Bill-To``).
+      1. INFERENCE_TOKEN env — shared key (legacy HF Spaces hosting; billed
+         via ``X-HF-Bill-To``). Still read by backend/routes/agent.py, so
+         the mechanism stays until the HF-router path itself is retired.
       2. session.hf_token — the user's own token (CLI / OAuth / cache file).
       3. HF_TOKEN env — belt-and-suspenders fallback for CLI users.
     """

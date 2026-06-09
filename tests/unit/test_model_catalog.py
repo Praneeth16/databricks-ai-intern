@@ -101,29 +101,18 @@ def test_databricks_provider_minimal_params():
     assert p == {"model": "databricks/databricks-claude-opus-4"}
 
 
-def test_databricks_reasoning_effort_in_extra_body():
+# FMAPI endpoints reject reasoning_effort outright (served-model schema), so
+# the databricks/ branch drops it for every effort level, strict or not.
+@pytest.mark.parametrize("effort", ["high", "minimal", "low", "max"])
+def test_databricks_reasoning_effort_dropped(effort):
     p = llm_params._resolve_llm_params(
-        "databricks/databricks-claude-opus-4", reasoning_effort="high",
+        "databricks/databricks-claude-opus-4", reasoning_effort=effort,
     )
-    assert p["extra_body"] == {"reasoning_effort": "high"}
+    assert p == {"model": "databricks/databricks-claude-opus-4"}
 
 
-def test_databricks_minimal_normalized_to_low():
+def test_databricks_effort_dropped_even_in_strict():
     p = llm_params._resolve_llm_params(
-        "databricks/databricks-claude-opus-4", reasoning_effort="minimal",
+        "databricks/x", reasoning_effort="max", strict=True,
     )
-    assert p["extra_body"] == {"reasoning_effort": "low"}
-
-
-def test_databricks_max_silently_dropped_in_non_strict():
-    p = llm_params._resolve_llm_params(
-        "databricks/databricks-claude-opus-4", reasoning_effort="max",
-    )
-    assert "extra_body" not in p
-
-
-def test_databricks_max_strict_raises():
-    with pytest.raises(llm_params.UnsupportedEffortError):
-        llm_params._resolve_llm_params(
-            "databricks/x", reasoning_effort="max", strict=True,
-        )
+    assert p == {"model": "databricks/x"}

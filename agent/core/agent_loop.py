@@ -221,7 +221,10 @@ async def _heal_effort_and_rebuild_params(
       • thinking-unsupported → cache ``None`` for this model, next call
         strips thinking entirely
       • invalid-effort → re-run the full cascade probe; the result lands
-        in the cache
+        in the cache. A transient (inconclusive) probe strips thinking for
+        this retry only — it must NOT be cached, or one network blip would
+        permanently disable thinking for the model. Left uncached, the
+        probe re-runs the next time the error surfaces.
     """
     from agent.core.effort_probe import ProbeInconclusive, _is_thinking_unsupported, probe_effort
 
@@ -239,10 +242,13 @@ async def _heal_effort_and_rebuild_params(
                 "healed: %s effort cascade → %s", model, outcome.effective_effort,
             )
         except ProbeInconclusive:
-            # Transient during healing — strip thinking for safety, next
-            # call will either succeed or surface the real error.
-            session.model_effective_effort[model] = None
-            logger.info("healed: %s probe inconclusive — stripped", model)
+            logger.info(
+                "healed: %s probe inconclusive — stripping thinking for "
+                "this call only (not cached)", model,
+            )
+            return _resolve_llm_params(
+                model, session.hf_token, reasoning_effort=None,
+            )
 
     return _resolve_llm_params(
         model,
@@ -1371,11 +1377,22 @@ class Handlers:
             try:
                 tool_args = json.loads(tc.function.arguments)
             except (json.JSONDecodeError, TypeError) as e:
-                # Malformed arguments — treat as failed, notify agent
+                # Malformed arguments — don't execute. Sanitise the call
+                # (same ToolCall object referenced from the assistant message
+                # already in context, so the unparseable arguments string
+                # doesn't poison the next LLM request) and append a tool-error
+                # result telling the model its tool-call JSON was invalid so
+                # the loop self-corrects next iteration instead of stalling.
                 logger.warning(f"Malformed tool arguments for {tool_name}: {e}")
+                tc.function.arguments = "{}"
+                error_msg = (
+                    f"ERROR: Tool call to '{tool_name}' had malformed JSON "
+                    f"arguments and was NOT executed. Re-issue the call with "
+                    f"valid JSON arguments."
+                )
                 tool_msg = Message(
                     role="tool",
-                    content=f"Malformed arguments: {e}",
+                    content=error_msg,
                     tool_call_id=tc.id,
                     name=tool_name,
                 )
@@ -1386,7 +1403,7 @@ class Handlers:
                         data={
                             "tool": tool_name,
                             "tool_call_id": tc.id,
-                            "output": f"Malformed arguments: {e}",
+                            "output": error_msg,
                             "success": False,
                         },
                     )

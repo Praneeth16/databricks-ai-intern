@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_TOKENS = 200_000
 
+# Ring-buffer cap for ``Session.logged_events``. Long-running sessions emit
+# an unbounded event stream (assistant chunks, tool logs); without a cap the
+# list grows for the lifetime of the process. Trimmed oldest-first;
+# ``dropped_event_count`` records how many were discarded so saved
+# trajectories are explicit about the gap.
+_MAX_LOGGED_EVENTS = 2000
+
 # Public so agent.core.session_resume + the CLI slash command can share one
 # fallback directory for offline (no-Lakebase) saves.
 DEFAULT_SESSION_LOG_DIR = Path("session_logs")
@@ -113,8 +120,9 @@ class Session:
         self.sandbox = None
         self._running_job_ids: set[str] = set()  # HF job IDs currently executing
 
-        # Session trajectory logging
+        # Session trajectory logging (ring buffer, see _MAX_LOGGED_EVENTS)
         self.logged_events: list[dict] = []
+        self.dropped_event_count: int = 0
         self.session_start_time = datetime.now().isoformat()
         self.turn_count: int = 0
         self.last_auto_save_turn: int = 0
@@ -151,6 +159,7 @@ class Session:
         self.total_cost_usd: float = 0.0
         self.actual_cost_usd: Optional[float] = None
         self._last_reconcile_ts: Optional[float] = None
+        self._reconcile_warned: bool = False
 
         # YOLO auto-approval policy (#17). When enabled, tool calls whose
         # estimated cost plus the running total stay under ``cost_cap_usd``
@@ -173,6 +182,10 @@ class Session:
                 "data": event.data,
             }
         )
+        overflow = len(self.logged_events) - _MAX_LOGGED_EVENTS
+        if overflow > 0:
+            del self.logged_events[:overflow]
+            self.dropped_event_count += overflow
 
         # Mid-turn heartbeat flush (owned by telemetry module).
         from agent.core.telemetry import HeartbeatSaver
@@ -254,7 +267,8 @@ class Session:
     async def reconcile_actual_cost(self) -> None:
         """Refresh ``actual_cost_usd`` from ``system.billing.usage`` for
         the workspace user. Best-effort; failure (no warehouse, no
-        permissions) is logged at debug and the field stays put. Rate
+        permissions) is warned once per session — so actual-vs-estimated
+        drift being unavailable is visible — then logged at debug. Rate
         limited to one query per 60s to keep the warehouse load light.
         """
         import time as _t
@@ -279,7 +293,15 @@ class Session:
             if actual is not None:
                 self.actual_cost_usd = round(float(actual), 4)
         except Exception as e:
-            logger.debug("reconcile_actual_cost suppressed: %s", e)
+            if not self._reconcile_warned:
+                self._reconcile_warned = True
+                logger.warning(
+                    "Actual-cost reconciliation unavailable — actual_cost_usd "
+                    "will stay unset and estimates won't be checked against "
+                    "system.billing.usage: %s", e,
+                )
+            else:
+                logger.debug("reconcile_actual_cost suppressed: %s", e)
 
     def effective_effort_for(self, model_name: str) -> str | None:
         """Resolve the effort level to actually send for ``model_name``.
@@ -335,6 +357,7 @@ class Session:
             "user_id": self.user_email,
             "messages": [msg.model_dump() for msg in self.context_manager.items],
             "events": self.logged_events,
+            "events_dropped": self.dropped_event_count,
             "tools": tools,
         }
 

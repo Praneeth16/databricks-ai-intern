@@ -21,6 +21,24 @@ _HF_WHOAMI_URL = "https://huggingface.co/api/whoami-v2"
 _HF_WHOAMI_TIMEOUT = 5  # seconds
 
 
+def _get_workspace_username() -> str | None:
+    """Resolve the Databricks workspace identity via the SDK auth chain.
+
+    Gated on ``DATABRICKS_HOST`` so offline runs (unit tests, local CLI
+    without a workspace) never attempt a network call. Fail-soft: any
+    resolution error falls through to the HF whoami last resort.
+    """
+    if not os.environ.get("DATABRICKS_HOST"):
+        return None
+    try:
+        from agent.core import db_client
+
+        return db_client.get_workspace_client().current_user.me().user_name or None
+    except Exception as e:
+        logger.debug("Workspace identity lookup failed: %s", e)
+        return None
+
+
 def _get_hf_username(hf_token: str | None = None) -> str:
     """Return the HF username for the given token.
 
@@ -224,8 +242,9 @@ class ContextManager:
         current_time = now.strftime("%H:%M:%S.%f")[:-3]
         current_timezone = f"{now.strftime('%Z')} (UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
 
-        # Get HF user info from OAuth token
-        hf_user_info = _get_hf_username(hf_token)
+        # Session identity: Databricks workspace user first, HF whoami as
+        # last resort (legacy HF OAuth path), "unknown" offline.
+        user_info = _get_workspace_username() or _get_hf_username(hf_token)
 
         # Pull the skill catalog (one-liner per registered skill). Lives
         # outside the YAML so contributors can drop a skill into
@@ -269,7 +288,7 @@ class ContextManager:
         return (
             f"{static_prompt}\n\n"
             f"[Session context: Date={current_date}, Time={current_time}, "
-            f"Timezone={current_timezone}, User={hf_user_info}, "
+            f"Timezone={current_timezone}, User={user_info}, "
             f"Tools={len(tool_specs)}]"
         )
 
