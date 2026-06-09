@@ -19,9 +19,13 @@ data:
   train: examples/kaggle-f1-pitstops-s6e5/artifacts        # placeholder
   test: examples/kaggle-f1-pitstops-s6e5/artifacts/submission.csv  # placeholder
 ground_truth:
-  # PLACEHOLDER table — real Year=2025 holdout labels land when Phase 2 wires
-  # the `data:` paths above to live UC datasets. The runner scores agent
-  # predictions against this source; it never trusts agent-supplied labels.
+  # Year=2025 rows of train.csv: (id, PitStop AS target) — PitStop is the
+  # competition target (NOT PitNextLap; verified 100% label agreement against
+  # iter10_val_preds.csv). Validated live in the test workspace
+  # (serverless_lakebase_praneeth_catalog.ml_intern_test): runner-side AUC
+  # matched the reference to 1e-9. The runner scores agent predictions against
+  # this source; it never trusts agent-supplied labels. Default table below is
+  # the prod-catalog name — CTAS it from train.csv on a new workspace.
   table: databricks_ai_intern.agent.kaggle_f1_pitstops_s6e5_holdout
   id_column: id
   label_column: target
