@@ -373,7 +373,7 @@ Edit `configs/main_agent_config.json`:
 
 ```json
 {
-  "model_name": "databricks/databricks-claude-sonnet-4.7",
+  "model_name": "databricks/databricks-claude-sonnet-4-6",
   "mcpServers": {
     "your-server-name": {
       "transport": "http",
