@@ -12,9 +12,10 @@ latest papers on X and try the most promising idea"* — and it runs the full lo
 research → hypothesize → train → measure → reproduce-gate → iterate, all inside
 **your** Databricks workspace with full MLflow lineage.
 
-This is a Databricks-native port of the agent: every HuggingFace primitive (HF
-Router, HF Jobs, HF Hub, HF Spaces, HF OAuth) has been replaced with a Databricks
-equivalent. There is no HF fallback — Databricks is the only supported backend.
+Databricks AI Intern is Databricks-native end to end — LLM inference, job
+submission, storage, model registry, serving, telemetry, and session state all run
+on first-class Databricks primitives. There is no external-provider fallback: your
+workspace is the only backend, so data and compute never leave it.
 
 ## Databricks-native component map
 
@@ -25,6 +26,7 @@ equivalent. There is no HF fallback — Databricks is the only supported backend
 | **Files** | UC Volumes (`/Volumes/<cat>/<schema>/<vol>/…`) + Workspace Files. |
 | **Datasets** | Unity Catalog tables (read-only SQL via a SQL warehouse). |
 | **Model registry** | UC registered models (`<cat>.<schema>.<name>`) via MLflow, `registry_uri=databricks-uc`. |
+| **Model serving** | Custom LLM Serving — vLLM-backed Serverless Optimized Deployments. The agent plans GPU tier / tensor-parallel / precision, builds + registers, deploys, and benchmarks the endpoint. |
 | **Telemetry** | MLflow Tracing — every turn, tool call, and LLM invocation is a span. Token/cost from `system.serving.endpoint_usage`. |
 | **Session state** | Lakebase (managed Postgres). |
 | **Secrets** | Databricks Secrets scopes; jobs use `{{secrets/scope/key}}` dynamic refs. |
@@ -52,6 +54,13 @@ Beyond one-shot training, Databricks AI Intern closes a measurable, self-iterati
   driver's seat): per round → generate → dedup → budget-clamp → sweep →
   reproduce-gate → accept → stop, with a budget > target > max-rounds > patience
   stop precedence.
+- **Autonomous serving** (`agent/core/serving_strategy.py` + `agent/tools/model_serving_tool.py`
+  + `model_serving` tool) — once a model is trained, the intern figures out *how to
+  host it*: size-driven GPU-tier / tensor-parallel / precision / concurrency
+  selection (deterministic VRAM math returns a ranked feasible set; the LLM picks by
+  the team's accuracy / latency / cost priorities), then build → register → deploy
+  (Custom LLM Serving) → query → benchmark, recording each deployment trial to the
+  ledger. Validated end to end on a serverless-GPU workspace.
 
 ## Quick Start
 
@@ -102,14 +111,45 @@ cd backend && bash start.sh        # FastAPI on :7860 (or :$DATABRICKS_APP_PORT)
 cd frontend && npm install && npm run dev   # Vite/React on :5173
 ```
 
-### Deploy as a Databricks App
+### Deploy with Databricks Asset Bundles (DAB)
+
+The whole stack ships as one bundle (`databricks.yml` + `resources/*.yml`): the App
+(backend + built frontend), the UC catalog/schema/volume, a `CU_1` Lakebase instance
+for session state, the secret scope, an optional warm GPU instance pool, and the
+prompt/eval jobs. One `databricks bundle deploy` provisions all of it.
 
 ```bash
+# 0. Build the frontend — the App serves <repo>/static, which is gitignored.
+cd frontend && npm install && npm run build && cd ..
+
+# 1. Host comes from the env var; the bundle does NOT interpolate ${VAR} into workspace.host.
 export DATABRICKS_HOST=https://<your-workspace>.cloud.databricks.com
+
+# 2. Validate + deploy. `dev` is the default target; `prod` pins a /Workspace/Shared root_path.
 databricks bundle validate
-databricks bundle deploy --target dev      # or prod
-databricks bundle run databricks_ai_intern            # open the App
+databricks bundle deploy --target dev          # or: --target prod
+#    override defaults with --var, e.g.:
+#    databricks bundle deploy --var uc_catalog=my_cat --var warehouse_id=<id>
+
+# 3. Open the App.
+databricks bundle run databricks_ai_intern --target dev
 ```
+
+The UC **catalog must already exist** — catalog creation needs the direct-deployment
+engine, so the bundle only manages the schema + volume under it. Pass an existing
+catalog via `--var uc_catalog=<name>` (default `databricks_ai_intern`).
+
+#### Post-deploy bootstrap (each idempotent)
+
+```bash
+python scripts/bootstrap_pool.py --name databricks-ai-intern-warm        # warm GPU pool for the sandbox
+databricks bundle run databricks_ai_intern_register_prompt --target dev  # system prompt → MLflow Prompt Registry
+python scripts/wire_eval_trigger.py --job-id <eval_job_id_from_deploy>   # fire eval on each new model version
+```
+
+UC grants for the App service principal are applied out-of-band after deploy (dev
+mode prefixes the App name, which mangles the SP lookup) — see the GRANT statements
+in the bootstrap scripts.
 
 ## Architecture
 
@@ -159,6 +199,8 @@ Three deployables, one `agent/` package:
 │  │  │  │  │  ├─ Databricks Jobs +      │  │  │  │  │  │
 │  │  │  │  │  │  Mosaic AI fine-tune    │  │  │  │  │  │
 │  │  │  │  │  ├─ UC registered models   │  │  │  │  │  │
+│  │  │  │  │  ├─ Custom LLM Serving     │  │  │  │  │  │
+│  │  │  │  │  │  (plan/build/deploy)    │  │  │  │  │  │
 │  │  │  │  │  ├─ Research loop: ledger, │  │  │  │  │  │
 │  │  │  │  │  │  sweep, critic          │  │  │  │  │  │
 │  │  │  │  │  ├─ Papers / docs / GitHub │  │  │  │  │  │
@@ -313,17 +355,5 @@ If you use Databricks AI Intern in your work, please cite it:
   author = {Paikray, Praneeth},
   year   = {2026},
   url    = {https://github.com/Praneeth16/databricks-ai-intern}
-}
-```
-
-This project is a Databricks-native port of the original
-[**ml-intern**](https://github.com/huggingface/ml-intern) by Hugging Face, whose
-agent loop and tooling design it builds on:
-
-```bibtex
-@software{huggingface_ml_intern,
-  title  = {ml-intern: An open-source ML engineer that reads papers, trains models, and ships ML models},
-  author = {{Hugging Face}},
-  url    = {https://github.com/huggingface/ml-intern}
 }
 ```
