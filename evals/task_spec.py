@@ -18,6 +18,11 @@ Schema (see plan.md Phase 1)::
     data:
       train: ...
       test: ...
+    ground_truth:               # holdout labels the *runner* scores against
+      table: cat.schema.tbl     # UC table — exactly one of table | path
+      # path: holdout.csv       # or a local csv / parquet / jsonl file
+      id_column: id             # optional; omit for positional join
+      label_column: target
     holdout: { type: temporal, column: Year, value: 2025 }
     budget: { max_cost_usd: 25.0, max_iterations: 30 }
 """
@@ -54,6 +59,7 @@ class EvalTask:
     human_ceiling: Optional[float] = None
     leaderboard: dict[str, Any] = field(default_factory=dict)
     data: dict[str, Any] = field(default_factory=dict)
+    ground_truth: dict[str, Any] = field(default_factory=dict)
     holdout: dict[str, Any] = field(default_factory=dict)
     budget: dict[str, Any] = field(default_factory=dict)
     source_path: Optional[Path] = None
@@ -74,6 +80,18 @@ def _as_dict(value: Any, *, path: Path, key: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"Task {path}: field '{key}' must be a mapping, got {type(value).__name__}")
     return value
+
+
+def _validate_ground_truth(gt: dict[str, Any], *, path: Path) -> dict[str, Any]:
+    if not gt:
+        return gt
+    if bool(gt.get("table")) == bool(gt.get("path")):
+        raise ValueError(
+            f"Task {path}: 'ground_truth' must declare exactly one of 'table' or 'path'"
+        )
+    if not gt.get("label_column"):
+        raise ValueError(f"Task {path}: 'ground_truth' requires 'label_column'")
+    return gt
 
 
 def load_task(path: str | Path) -> EvalTask:
@@ -115,6 +133,9 @@ def load_task(path: str | Path) -> EvalTask:
         human_ceiling=_as_float(data.get("human_ceiling"), path=path, key="human_ceiling"),
         leaderboard=_as_dict(data.get("leaderboard"), path=path, key="leaderboard"),
         data=_as_dict(data.get("data"), path=path, key="data"),
+        ground_truth=_validate_ground_truth(
+            _as_dict(data.get("ground_truth"), path=path, key="ground_truth"), path=path
+        ),
         holdout=_as_dict(data.get("holdout"), path=path, key="holdout"),
         budget=_as_dict(data.get("budget"), path=path, key="budget"),
         source_path=path,

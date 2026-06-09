@@ -41,7 +41,12 @@ Beyond one-shot training, Databricks AI Intern closes a measurable, self-iterati
 - **Experiment ledger** (`agent/core/experiment_ledger.py`) — every run persisted
   to a UC Delta table (JSONL fallback), with config, metric, and reproduce status.
 - **Eval harness** (`evals/`) — task-spec-driven scoring (ROC-AUC, accuracy, rank
-  percentile, eval-loss) so improvements are measured, not asserted.
+  percentile, eval-loss) so improvements are measured, not asserted. The runner
+  loads ground truth from the task spec (a UC table via the warehouse, or a local
+  csv/parquet/jsonl file) — never from agent output. Predictions join by
+  `id_column` (coverage validated; missing/extra ids fail the run) or
+  positionally with a strict length check. An agent that returns only its own
+  score is recorded but flagged `self_reported` on the scorecard.
 - **Parallel sweeps** (`agent/core/sweep.py` + `sweep` tool) — fan out top-k
   hypotheses across Databricks Jobs concurrently; metric returned via a stdout
   sentinel that survives `runs/get-output`.
@@ -196,8 +201,17 @@ catalog via `--var uc_catalog=<name>` (default `databricks_ai_intern`).
 ```bash
 python scripts/bootstrap_pool.py --name databricks-ai-intern-warm        # warm GPU pool for the sandbox
 databricks bundle run databricks_ai_intern_register_prompt --target dev  # system prompt → MLflow Prompt Registry
-python scripts/wire_eval_trigger.py --job-id <eval_job_id_from_deploy>   # fire eval on each new model version
+python scripts/wire_eval_trigger.py --job-id <eval_job_id_from_deploy>   # link eval job as the models' deployment job
 ```
+
+`wire_eval_trigger.py` sets the eval job as the MLflow deployment job
+(`deployment_job_id`) on every model already registered under the UC schema
+(or a single one via `--model`). The link is per-model, so re-run it after
+registering new models — it warns and exits cleanly when the schema has no
+models yet.
+
+**Manual steps** (not covered by the bundle or the scripts): creating the UC
+catalog itself (see above), and the App SP grants below.
 
 UC grants for the App service principal are applied out-of-band after deploy (dev
 mode prefixes the App name, which mangles the SP lookup) — see the GRANT statements

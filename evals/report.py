@@ -25,8 +25,17 @@ def _scorecard_md(result: EvalResult, task: EvalTask) -> str:
     lines = [
         f"# Eval scorecard — {task.id}",
         "",
+    ]
+    if result.self_reported:
+        lines += [
+            "> **WARNING: SELF-REPORTED SCORE.** The agent asserted this score "
+            "itself; it was NOT verified against the task's ground truth.",
+            "",
+        ]
+    score_suffix = " (self-reported, unverified)" if result.self_reported else ""
+    lines += [
         f"- **Metric:** {result.metric_name} ({direction})",
-        f"- **Final score:** {_fmt(result.score)}",
+        f"- **Final score:** {_fmt(result.score)}{score_suffix}",
         f"- **Baseline:** {_fmt(task.baseline_score)}",
         f"- **Human ceiling:** {_fmt(task.human_ceiling)}",
         f"- **CV↔LB gap:** {_fmt(result.cv_lb_gap)}",
@@ -60,6 +69,7 @@ def write_report(result: EvalResult, task: EvalTask, out_dir: str | Path) -> Pat
         "task_id": result.task_id,
         "metric_name": result.metric_name,
         "score": result.score,
+        "self_reported": result.self_reported,
         "baseline_score": task.baseline_score,
         "human_ceiling": task.human_ceiling,
         "cv_lb_gap": result.cv_lb_gap,

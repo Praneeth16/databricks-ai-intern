@@ -18,6 +18,13 @@ data:
   # below cannot be applied to a submission file.
   train: examples/kaggle-f1-pitstops-s6e5/artifacts        # placeholder
   test: examples/kaggle-f1-pitstops-s6e5/artifacts/submission.csv  # placeholder
+ground_truth:
+  # PLACEHOLDER table — real Year=2025 holdout labels land when Phase 2 wires
+  # the `data:` paths above to live UC datasets. The runner scores agent
+  # predictions against this source; it never trusts agent-supplied labels.
+  table: databricks_ai_intern.agent.kaggle_f1_pitstops_s6e5_holdout
+  id_column: id
+  label_column: target
 holdout:
   # Year=2025 temporal holdout was the only valid LB proxy (val→LB gap +0.042, stable).
   type: temporal
