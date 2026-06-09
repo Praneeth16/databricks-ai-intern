@@ -1,12 +1,12 @@
 # Databricks AI Intern
 
-*An autonomous ML engineer that reads the literature, ingests Unity Catalog
+*An autonomous AI engineer that reads the literature, ingests Unity Catalog
 datasets, runs Mosaic AI jobs, and registers trained models — natively on the
 Databricks AI runtime, until the numbers go up.*
 
 ---
 
-Databricks AI Intern is an agentic ML engineer. Give it a goal — *"fine-tune Llama on this
+Databricks AI Intern is an agentic AI engineer. Give it a goal — *"fine-tune Llama on this
 UC table"*, *"get me a top-decile model on this Kaggle dataset"*, *"read the
 latest papers on X and try the most promising idea"* — and it runs the full loop:
 research → hypothesize → train → measure → reproduce-gate → iterate, all inside
@@ -21,7 +21,7 @@ workspace is the only backend, so data and compute never leave it.
 
 | Concern | Native primitive |
 |---|---|
-| **LLM inference** | Foundation Model API serving endpoints via LiteLLM's native `databricks/` provider (api_base + key auto-resolved from the SDK auth chain). Mosaic AI Gateway governance + usage logging apply transparently when enabled on the endpoint. No direct Bedrock/Anthropic. |
+| **LLM inference** | Foundation Model API serving endpoints (api_base + key auto-resolved from the SDK auth chain). Mosaic AI Gateway governance + usage logging apply transparently when enabled on the endpoint. No direct Bedrock/Anthropic. |
 | **Job submission** | Databricks Jobs API (`runs/submit`) + Mosaic AI Model Training (`databricks-genai`) for fine-tunes. |
 | **Files** | UC Volumes (`/Volumes/<cat>/<schema>/<vol>/…`) + Workspace Files. |
 | **Datasets** | Unity Catalog tables (read-only SQL via a SQL warehouse). |
@@ -34,7 +34,7 @@ workspace is the only backend, so data and compute never leave it.
 | **Deploy** | Databricks Asset Bundles (`databricks.yml` + `resources/*.yml`). |
 | **Prompts** | MLflow Prompt Registry (`databricks_ai_intern.agent.system_prompt`), YAML fallback. |
 
-## What makes it an ML *researcher*, not just an ML *engineer*
+## What makes it an AI *researcher*, not just an AI *engineer*
 
 Beyond one-shot training, Databricks AI Intern closes a measurable, self-iterating loop:
 
@@ -61,6 +61,58 @@ Beyond one-shot training, Databricks AI Intern closes a measurable, self-iterati
   the team's accuracy / latency / cost priorities), then build → register → deploy
   (Custom LLM Serving) → query → benchmark, recording each deployment trial to the
   ledger. Validated end to end on a serverless-GPU workspace.
+
+## Deployment
+
+Every model the intern trains or fine-tunes is registered to **Unity Catalog**
+(`<cat>.<schema>.<name>` via MLflow with `registry_uri=databricks-uc`) — versioned,
+governed, lineage-tracked. How it's served depends on the model type; both land on
+**Mosaic AI Model Serving** in your workspace (real-time REST + batch), under UC
+governance and Mosaic AI Gateway.
+
+### LLMs & fine-tuned LLMs → Custom LLM Serving (GPU)
+
+The `model_serving` tool takes these from a registered checkpoint to a live endpoint
+**autonomously** — the path validated end to end (Qwen2.5-0.5B on an A10, ~338 tok/s):
+
+- **`plan_deployment`** — size-driven strategy: deterministic VRAM math returns the
+  ranked *feasible* configs (GPU tier, tensor-parallel, precision, fixed concurrency);
+  the LLM picks by the team's accuracy / latency / cost priorities.
+- **`build_and_register`** — a serverless-GPU job downloads weights, smoke-tests vLLM,
+  and registers a Serverless Optimized Deployment to UC.
+- **`deploy`** — creates the endpoint (vLLM, OpenAI-compatible `/invocations`, fixed
+  provisioned concurrency, no autoscaling).
+- **`query` / `benchmark`** — smoke test + concurrency sweep (throughput, latency,
+  HTTP 429s), recorded to the experiment ledger.
+
+| | |
+|---|---|
+| **GPU tiers** | `GPU_MEDIUM` (1×A10, 24 GB) · `MULTIGPU_MEDIUM` (4×A10, tensor-parallel) · `GPU_XLARGE` (1×H100, 80 GB) |
+| **Precision** | bf16 / fp16, online fp8, or pre-quantized AWQ / GPTQ / int8 (with the artifact) |
+| **Selection** | smallest GPU that fits → escalate to H100 → tensor-parallel across A10×4 |
+| **Source** | a HF repo id, a UC model URI, or weights on a `/Volumes` path |
+
+Base/foundation LLMs that don't need fine-tuning are called directly via the
+**Foundation Model API** (provisioned-throughput or pay-per-token) — no deploy step.
+
+### Classical ML models (scikit-learn / XGBoost / LightGBM / …) → Model Serving (CPU)
+
+Logged as MLflow models and registered to UC the same way, then served as:
+
+- **Real-time** — a Mosaic AI Model Serving CPU endpoint (scale-to-zero capable) for
+  low-latency REST scoring.
+- **Batch** — `ai_query(...)` over a UC table, an MLflow `spark_udf`, or a scheduled
+  Databricks Job writing scores straight to Delta.
+
+Today the intern automates the *LLM* serving path end to end; classical-ML models are
+trained + registered by the agent and promoted to a Model Serving endpoint via the
+bundle / Serving UI / API.
+
+### Where everything runs
+
+All endpoints live in **your** workspace under Unity Catalog governance, fronted by
+Mosaic AI Gateway (rate limits, usage logging → `system.serving.endpoint_usage`,
+guardrails) when enabled. Nothing leaves the workspace.
 
 ## Quick Start
 
@@ -351,7 +403,7 @@ If you use Databricks AI Intern in your work, please cite it:
 
 ```bibtex
 @software{databricks_ai_intern,
-  title  = {Databricks AI Intern: An Autonomous ML Engineer on the Databricks AI Runtime},
+  title  = {Databricks AI Intern: An Autonomous AI Engineer on the Databricks AI Runtime},
   author = {Paikray, Praneeth},
   year   = {2026},
   url    = {https://github.com/Praneeth16/databricks-ai-intern}
