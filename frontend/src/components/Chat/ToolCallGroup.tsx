@@ -215,10 +215,6 @@ function formatResearchStep(raw: string): { label: string } {
     const base = (op && opLabels[op]) || 'Searching papers';
     return { label: detail ? `${base}: ${detail}` : base };
   }
-  if (step.startsWith('find_hf_api')) {
-    const detail = (args.query) || (args.tag);
-    return { label: detail ? `Finding API: ${detail}` : 'Finding API endpoints' };
-  }
   if (step.startsWith('read')) {
     const path = (args.path) || '';
     const filename = path.split('/').pop();

@@ -310,13 +310,16 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
     transportRef.current?.updateSideChannel(sideChannel);
   }, [sideChannel]);
 
-  // Destroy transport on unmount
+  // Register transport teardown with the store (so session deletion can
+  // abort live SSE streams) and destroy on unmount.
   useEffect(() => {
+    useAgentStore.getState().registerTransport(sessionId, () => transportRef.current?.destroy());
     return () => {
+      useAgentStore.getState().registerTransport(sessionId, null);
       transportRef.current?.destroy();
       transportRef.current = null;
     };
-  }, []);
+  }, [sessionId]);
 
   // -- Restore persisted messages for this session ------------------------
   const initialMessages = useMemo(

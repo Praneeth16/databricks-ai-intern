@@ -37,7 +37,7 @@ const seededStore = {
   version: 0,
 };
 
-async function setupRoutes(page: Page, patchHandler: (body: any) => any) {
+async function setupRoutes(page: Page, patchHandler: (body: Record<string, unknown>) => Record<string, unknown>) {
   // Auth endpoints — return a logged-in dev user so the layout doesn't
   // redirect us to a login page.
   await page.route('**/auth/status', async (route) => {
@@ -120,7 +120,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('left-click bolt toggles YOLO on with default cap', async ({ page }) => {
-  const patchBodies: any[] = [];
+  const patchBodies: Record<string, unknown>[] = [];
   await setupRoutes(page, (body) => {
     patchBodies.push(body);
     return {
@@ -152,7 +152,7 @@ test('left-click bolt toggles YOLO on with default cap', async ({ page }) => {
 });
 
 test('right-click bolt opens dialog and Apply PATCHes with cap', async ({ page }) => {
-  const patchBodies: any[] = [];
+  const patchBodies: Record<string, unknown>[] = [];
   await setupRoutes(page, (body) => {
     patchBodies.push(body);
     return {

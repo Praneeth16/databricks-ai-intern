@@ -134,6 +134,9 @@ interface AgentStore {
   // Tool rejected states (tool_call_id -> true if rejected by user) - persisted across renders
   rejectedTools: Record<string, boolean>;
 
+  // Per-session transport teardown callbacks (session_id -> abort live SSE streams)
+  transportDestroyers: Record<string, () => void>;
+
   // ── Per-session actions ─────────────────────────────────────────────
 
   /** Update a session's state. If it's the active session, also update flat state. */
@@ -181,23 +184,30 @@ interface AgentStore {
 
   setToolRejected: (toolCallId: string, isRejected: boolean) => void;
   getToolRejected: (toolCallId: string) => boolean | undefined;
+
+  /** Register (or unregister with null) a session transport's teardown. */
+  registerTransport: (sessionId: string, destroy: (() => void) | null) => void;
+  /** Abort any live SSE streams for a session (used on session delete). */
+  destroyTransport: (sessionId: string) => void;
 }
 
 /**
  * Helper: patch the active session's snapshot with partial per-session fields.
  * Returns the `sessionStates` slice to spread into a `set()` call, or `{}`
- * if there's no active session snapshot to update.
+ * if there's no active session. Seeds the snapshot from defaults when
+ * missing so the map stays the single source of truth for per-session state.
  */
 function syncSnapshot(
   state: AgentStore,
   patch: Partial<PerSessionState>,
 ): { sessionStates: Record<string, PerSessionState> } | Record<string, never> {
   const { activeSessionId, sessionStates } = state;
-  if (!activeSessionId || !sessionStates[activeSessionId]) return {};
+  if (!activeSessionId) return {};
+  const current = sessionStates[activeSessionId] || { ...defaultSessionState };
   return {
     sessionStates: {
       ...sessionStates,
-      [activeSessionId]: { ...sessionStates[activeSessionId], ...patch },
+      [activeSessionId]: { ...current, ...patch },
     },
   };
 }
@@ -263,6 +273,7 @@ export const useAgentStore = create<AgentStore>()((set, get) => ({
   jobStatuses: {},
   toolErrors: loadToolErrors(),
   rejectedTools: loadRejectedTools(),
+  transportDestroyers: {},
 
   // ── Per-session state management ──────────────────────────────────
 
@@ -285,7 +296,7 @@ export const useAgentStore = create<AgentStore>()((set, get) => ({
     // (plus activityStatus when the processing→idle side-effect fires).
     // This prevents overwriting flat fields changed by global setters
     // (e.g. setPanelView called from CodePanel) with stale snapshot values.
-    let flatMirror: Record<string, unknown> = {};
+    const flatMirror: Record<string, unknown> = {};
     if (isActive) {
       for (const key of Object.keys(updates)) {
         flatMirror[key] = updated[key as keyof PerSessionState];
@@ -309,29 +320,12 @@ export const useAgentStore = create<AgentStore>()((set, get) => ({
   switchActiveSession: (sessionId) => {
     const state = get();
 
-    // Build a new sessionStates map (never mutate the existing object)
-    const updatedStates = { ...state.sessionStates };
-
-    // Save current active session's flat state back to its snapshot
-    if (state.activeSessionId && state.activeSessionId !== sessionId) {
-      updatedStates[state.activeSessionId] = {
-        isProcessing: state.isProcessing,
-        activityStatus: state.activityStatus,
-        panelData: state.panelData,
-        panelView: state.panelView,
-        panelEditable: state.panelEditable,
-        plan: state.plan,
-        researchAgents: state.sessionStates[state.activeSessionId]?.researchAgents ?? {},
-        researchSteps: state.sessionStates[state.activeSessionId]?.researchSteps ?? [],
-        researchStats: state.sessionStates[state.activeSessionId]?.researchStats ?? { ...defaultResearchStats },
-      };
-    }
-
-    // Restore the new session's state
-    const incoming = updatedStates[sessionId] || { ...defaultSessionState };
+    // The sessionStates map is the single source of truth — every writer
+    // (updateSession + the global setters via syncSnapshot) keeps the active
+    // session's snapshot current, so no flat→map write-back is needed here.
+    const incoming = state.sessionStates[sessionId] || { ...defaultSessionState };
     set({
       activeSessionId: sessionId,
-      sessionStates: updatedStates,
       isProcessing: incoming.isProcessing,
       activityStatus: incoming.activityStatus,
       panelData: incoming.panelData,
@@ -345,20 +339,27 @@ export const useAgentStore = create<AgentStore>()((set, get) => ({
 
   clearSessionState: (sessionId) => {
     set((state) => {
-      const { [sessionId]: _, ...rest } = state.sessionStates;
+      const rest = { ...state.sessionStates };
+      delete rest[sessionId];
       return { sessionStates: rest };
     });
   },
 
   // ── Global flags ──────────────────────────────────────────────────
 
-  setProcessing: (isProcessing) => {
-    const current = get().activityStatus;
-    const preserveStatus = current.type === 'waiting-approval' || current.type === 'cancelled';
-    set({ isProcessing, ...(!isProcessing && !preserveStatus ? { activityStatus: { type: 'idle' } } : {}) });
-  },
+  setProcessing: (isProcessing) => set((state) => {
+    const preserveStatus = state.activityStatus.type === 'waiting-approval' || state.activityStatus.type === 'cancelled';
+    const patch: Partial<PerSessionState> = {
+      isProcessing,
+      ...(!isProcessing && !preserveStatus ? { activityStatus: { type: 'idle' } as ActivityStatus } : {}),
+    };
+    return { ...patch, ...syncSnapshot(state, patch) };
+  }),
   setConnected: (isConnected) => set({ isConnected }),
-  setActivityStatus: (status) => set({ activityStatus: status }),
+  setActivityStatus: (status) => set((state) => {
+    const patch: Partial<PerSessionState> = { activityStatus: status };
+    return { ...patch, ...syncSnapshot(state, patch) };
+  }),
   setUser: (user) => set({ user }),
   setError: (error) => set({ error }),
   setLlmHealthError: (error) => set({ llmHealthError: error }),
@@ -479,4 +480,22 @@ export const useAgentStore = create<AgentStore>()((set, get) => ({
   },
 
   getToolRejected: (toolCallId) => get().rejectedTools[toolCallId],
+
+  // ── Session transports ───────────────────────────────────────────────
+
+  registerTransport: (sessionId, destroy) => {
+    set((state) => {
+      const updated = { ...state.transportDestroyers };
+      if (destroy) {
+        updated[sessionId] = destroy;
+      } else {
+        delete updated[sessionId];
+      }
+      return { transportDestroyers: updated };
+    });
+  },
+
+  destroyTransport: (sessionId) => {
+    get().transportDestroyers[sessionId]?.();
+  },
 }));

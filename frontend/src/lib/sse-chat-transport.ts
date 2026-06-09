@@ -274,6 +274,7 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
 export class SSEChatTransport implements ChatTransport<UIMessage> {
   private sessionId: string;
   private sideChannel: SideChannelCallbacks;
+  private inflightAbort: AbortController | null = null;
 
   constructor(sessionId: string, sideChannel: SideChannelCallbacks) {
     this.sessionId = sessionId;
@@ -288,7 +289,21 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
   }
 
   destroy(): void {
-    // Nothing to clean up — no persistent connections
+    this.inflightAbort?.abort();
+    this.inflightAbort = null;
+  }
+
+  /** Abort any prior in-flight stream and arm a fresh controller, linked to
+   * the SDK's abortSignal when provided. */
+  private armAbort(external: AbortSignal | undefined): AbortController {
+    this.inflightAbort?.abort();
+    const controller = new AbortController();
+    this.inflightAbort = controller;
+    if (external) {
+      if (external.aborted) controller.abort();
+      else external.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+    return controller;
   }
 
   // -- ChatTransport interface ---------------------------------------------
@@ -303,6 +318,7 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
     } & ChatRequestOptions,
   ): Promise<ReadableStream<UIMessageChunk>> {
     const sessionId = this.sessionId;
+    const abort = this.armAbort(options.abortSignal);
 
     // Detect: is this an approval continuation or a new user message?
     // After addToolApprovalResponse, the SDK calls sendMessages again.
@@ -344,7 +360,7 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
     const response = await apiFetch(`/api/chat/${sessionId}`, {
       method: 'POST',
       body: JSON.stringify(body),
-      signal: options.abortSignal,
+      signal: abort.signal,
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream',
@@ -389,8 +405,10 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
       if (!info.is_processing) return null;
 
       // Session is mid-turn — subscribe to its event broadcast.
+      const abort = this.armAbort(undefined);
       const response = await apiFetch(`/api/events/${this.sessionId}`, {
         headers: { 'Accept': 'text/event-stream' },
+        signal: abort.signal,
       });
       if (!response.ok || !response.body) return null;
 

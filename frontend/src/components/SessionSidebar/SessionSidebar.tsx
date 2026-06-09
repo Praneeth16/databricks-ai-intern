@@ -76,6 +76,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
 
     const isLastSession = sessions.length === 1;
 
+    useAgentStore.getState().destroyTransport(sessionId);
     useAgentStore.getState().clearSessionState(sessionId);
     try {
       await apiFetch(`/api/session/${sessionId}`, { method: 'DELETE' });
