@@ -38,9 +38,12 @@ logger = logging.getLogger(__name__)
 # resolver can take ``databricks/databricks-claude-opus-4-7`` and look
 # up ``databricks-claude-opus-4-7`` directly.
 FMAPI_PRICE_USD_PER_MTOK: dict[str, dict[str, float]] = {
+    "databricks-claude-opus-4-8":          {"input": 15.0, "output": 75.0},
     "databricks-claude-opus-4-7":          {"input": 15.0, "output": 75.0},
     "databricks-claude-opus-4-6":          {"input": 15.0, "output": 75.0},
     "databricks-claude-opus-4":            {"input": 15.0, "output": 75.0},
+    "databricks-claude-sonnet-4-6":        {"input":  3.0, "output": 15.0},
+    "databricks-claude-sonnet-4-5":        {"input":  3.0, "output": 15.0},
     "databricks-claude-sonnet-4":          {"input":  3.0, "output": 15.0},
     "databricks-claude-3-7-sonnet":        {"input":  3.0, "output": 15.0},
     "databricks-meta-llama-3-3-70b-instruct": {"input": 1.00, "output": 1.00},

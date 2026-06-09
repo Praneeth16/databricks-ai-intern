@@ -56,14 +56,14 @@ router = APIRouter(prefix="/api", tags=["agent"])
 
 AVAILABLE_MODELS = [
     {
-        "id": "databricks/databricks-claude-opus-4",
-        "label": "Claude Opus 4 (Databricks FMAPI)",
+        "id": "databricks/databricks-claude-sonnet-4-6",
+        "label": "Claude Sonnet 4.6 (Databricks FMAPI)",
         "provider": "databricks",
         "recommended": True,
     },
     {
-        "id": "databricks/databricks-claude-sonnet-4",
-        "label": "Claude Sonnet 4 (Databricks FMAPI)",
+        "id": "databricks/databricks-claude-opus-4-8",
+        "label": "Claude Opus 4.8 (Databricks FMAPI)",
         "provider": "databricks",
     },
     {

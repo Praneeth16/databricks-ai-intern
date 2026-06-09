@@ -49,7 +49,7 @@ LIVE_TESTS_ENABLED = os.environ.get("DATABRICKS_AI_INTERN_LIVE_LLM_TESTS") == "1
 # ``databricks-claude-opus-4-7`` etc — keep the override path).
 CLAUDE_MODEL = os.environ.get(
     "DATABRICKS_AI_INTERN_LIVE_CLAUDE_MODEL",
-    "databricks/databricks-claude-opus-4-6",
+    "databricks/databricks-claude-sonnet-4-6",
 )
 NON_CLAUDE_MODEL = os.environ.get(
     "DATABRICKS_AI_INTERN_LIVE_NON_CLAUDE_MODEL",

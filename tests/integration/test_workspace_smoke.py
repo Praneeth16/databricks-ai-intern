@@ -37,9 +37,9 @@ def test_serving_endpoint_for_default_model(workspace_client, databricks_setting
     """Verify the agent's default model id maps to an endpoint we can query."""
     from agent.core import model_catalog
 
-    info = model_catalog.lookup("databricks/databricks-claude-opus-4")
+    info = model_catalog.lookup("databricks/databricks-claude-sonnet-4-6")
     if info is None:
-        pytest.skip("databricks-claude-opus-4 endpoint not available in this workspace.")
+        pytest.skip("databricks-claude-sonnet-4-6 endpoint not available in this workspace.")
     assert info.is_chat
 
 

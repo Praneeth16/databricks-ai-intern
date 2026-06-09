@@ -1,5 +1,5 @@
 {
-  "model_name": "databricks/databricks-claude-opus-4-6",
+  "model_name": "databricks/databricks-claude-sonnet-4-6",
   "save_sessions": true,
   "yolo_mode": false,
   "confirm_cpu_jobs": true,
