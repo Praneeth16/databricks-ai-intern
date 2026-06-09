@@ -151,7 +151,7 @@ When running on Databricks Apps, auth is on-behalf-of the signed-in user via the
 ### Usage
 
 ```bash
-databricks-ai-intern --model databricks/databricks-claude-sonnet-4 "fine-tune llama on my UC table"
+databricks-ai-intern --model databricks/databricks-claude-sonnet-4-6 "fine-tune llama on my UC table"
 databricks-ai-intern --max-iterations 100 "your prompt"
 databricks-ai-intern --no-stream "your prompt"
 ```
