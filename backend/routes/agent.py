@@ -1,7 +1,8 @@
 """Agent API routes — REST + SSE endpoints.
 
-All routes (except /health) require authentication via the get_current_user
-dependency. In dev mode (no OAUTH_CLIENT_ID), auth is bypassed automatically.
+All routes (except /health and /config/model) require authentication via the
+get_current_user dependency — Apps proxy headers when deployed, the SDK
+unified auth chain in local dev.
 """
 
 import asyncio
@@ -31,7 +32,13 @@ from models import (
     YoloPolicyRequest,
     YoloPolicyResponse,
 )
-from session_manager import MAX_SESSIONS, AgentSession, SessionCapacityError, session_manager
+from session_manager import (
+    BROADCAST_CLOSED,
+    MAX_SESSIONS,
+    AgentSession,
+    SessionCapacityError,
+    session_manager,
+)
 from starlette.datastructures import FormData, UploadFile
 from uc_volume_uploads import (
     MAX_DATASET_UPLOAD_BYTES,
@@ -97,7 +104,9 @@ async def health_check() -> HealthResponse:
 
 
 @router.get("/health/llm", response_model=LLMHealthResponse)
-async def llm_health_check() -> LLMHealthResponse:
+async def llm_health_check(
+    user: dict = Depends(get_current_user),
+) -> LLMHealthResponse:
     """Check if the LLM provider is reachable and the API key is valid.
 
     Makes a minimal 1-token completion call.  Catches common errors:
@@ -675,6 +684,8 @@ def _sse_response(broadcaster, event_queue, sub_id) -> StreamingResponse:
                     # SSE comment — ignored by parsers, keeps connection alive
                     yield ": keepalive\n\n"
                     continue
+                if msg is BROADCAST_CLOSED:
+                    break
                 event_type = msg.get("event_type", "")
                 yield f"data: {json.dumps(msg)}\n\n"
                 if event_type in _TERMINAL_EVENTS:

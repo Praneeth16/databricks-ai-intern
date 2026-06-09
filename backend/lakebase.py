@@ -76,6 +76,21 @@ def get_pool():
     return _POOL
 
 
+def _execute_with_retry(pool, op: str, fn):
+    """Run *fn* on a pooled connection, retrying once immediately on a
+    psycopg OperationalError (e.g. a connection stranded by OAuth token
+    rotation)."""
+    import psycopg
+
+    try:
+        with pool.connection() as conn:
+            return fn(conn)
+    except psycopg.OperationalError as e:
+        logger.warning("Lakebase %s hit OperationalError (%s) — retrying once.", op, e)
+        with pool.connection() as conn:
+            return fn(conn)
+
+
 def _ensure_schema(pool) -> None:
     """Create the tables the backend persists to. Idempotent."""
     with pool.connection() as conn:
@@ -111,39 +126,45 @@ def upsert_session(*, session_id: str, user_id: str, user_email: str | None,
     pool = get_pool()
     if pool is None:
         return
+    def _write(conn):
+        conn.execute(
+            """
+            INSERT INTO databricks_ai_intern_sessions
+              (session_id, user_id, user_email, model_name, message_count, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (session_id) DO UPDATE SET
+                user_email = EXCLUDED.user_email,
+                model_name = EXCLUDED.model_name,
+                message_count = EXCLUDED.message_count,
+                is_active = EXCLUDED.is_active,
+                last_active_at = now()
+            """,
+            (session_id, user_id, user_email, model_name, message_count, is_active),
+        )
+
     try:
-        with pool.connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO databricks_ai_intern_sessions
-                  (session_id, user_id, user_email, model_name, message_count, is_active)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (session_id) DO UPDATE SET
-                    user_email = EXCLUDED.user_email,
-                    model_name = EXCLUDED.model_name,
-                    message_count = EXCLUDED.message_count,
-                    is_active = EXCLUDED.is_active,
-                    last_active_at = now()
-                """,
-                (session_id, user_id, user_email, model_name, message_count, is_active),
-            )
+        _execute_with_retry(pool, "upsert_session", _write)
     except Exception as e:
-        logger.debug("upsert_session suppressed: %s", e)
+        logger.warning("Lakebase upsert_session failed for session %s: %s", session_id, e)
 
 
 def mark_session_inactive(session_id: str) -> None:
     pool = get_pool()
     if pool is None:
         return
+    def _write(conn):
+        conn.execute(
+            "UPDATE databricks_ai_intern_sessions SET is_active = FALSE, last_active_at = now() "
+            "WHERE session_id = %s",
+            (session_id,),
+        )
+
     try:
-        with pool.connection() as conn:
-            conn.execute(
-                "UPDATE databricks_ai_intern_sessions SET is_active = FALSE, last_active_at = now() "
-                "WHERE session_id = %s",
-                (session_id,),
-            )
+        _execute_with_retry(pool, "mark_session_inactive", _write)
     except Exception as e:
-        logger.debug("mark_session_inactive suppressed: %s", e)
+        logger.warning(
+            "Lakebase mark_session_inactive failed for session %s: %s", session_id, e
+        )
 
 
 def save_trajectory(
@@ -171,29 +192,32 @@ def save_trajectory(
     if pool is None:
         return False
     message_count = len(trajectory.get("messages") or [])
+
+    def _write(conn):
+        conn.execute(
+            """
+            INSERT INTO databricks_ai_intern_sessions
+              (session_id, user_id, user_email, model_name,
+               message_count, is_active, trajectory)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (session_id) DO UPDATE SET
+                user_email = EXCLUDED.user_email,
+                model_name = EXCLUDED.model_name,
+                message_count = EXCLUDED.message_count,
+                trajectory = EXCLUDED.trajectory,
+                last_active_at = now()
+            """,
+            (
+                session_id, user_id, user_email, model_name,
+                message_count, True, json.dumps(trajectory),
+            ),
+        )
+
     try:
-        with pool.connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO databricks_ai_intern_sessions
-                  (session_id, user_id, user_email, model_name,
-                   message_count, is_active, trajectory)
-                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
-                ON CONFLICT (session_id) DO UPDATE SET
-                    user_email = EXCLUDED.user_email,
-                    model_name = EXCLUDED.model_name,
-                    message_count = EXCLUDED.message_count,
-                    trajectory = EXCLUDED.trajectory,
-                    last_active_at = now()
-                """,
-                (
-                    session_id, user_id, user_email, model_name,
-                    message_count, True, json.dumps(trajectory),
-                ),
-            )
+        _execute_with_retry(pool, "save_trajectory", _write)
         return True
     except Exception as e:
-        logger.debug("save_trajectory suppressed: %s", e)
+        logger.warning("Lakebase save_trajectory failed for session %s: %s", session_id, e)
         return False
 
 
@@ -208,22 +232,24 @@ def list_sessions(user_id: str, limit: int = 20) -> list[dict]:
     pool = get_pool()
     if pool is None:
         return []
+    def _query(conn):
+        return list(conn.execute(
+            """
+            SELECT session_id, last_active_at, model_name, message_count,
+                   trajectory -> 'messages' AS messages
+              FROM databricks_ai_intern_sessions
+             WHERE user_id = %s
+               AND trajectory IS NOT NULL
+             ORDER BY last_active_at DESC
+             LIMIT %s
+            """,
+            (user_id, limit),
+        ).fetchall())
+
     try:
-        with pool.connection() as conn:
-            rows = list(conn.execute(
-                """
-                SELECT session_id, last_active_at, model_name, message_count,
-                       trajectory -> 'messages' AS messages
-                  FROM databricks_ai_intern_sessions
-                 WHERE user_id = %s
-                   AND trajectory IS NOT NULL
-                 ORDER BY last_active_at DESC
-                 LIMIT %s
-                """,
-                (user_id, limit),
-            ).fetchall())
+        rows = _execute_with_retry(pool, "list_sessions", _query)
     except Exception as e:
-        logger.debug("list_sessions suppressed: %s", e)
+        logger.warning("Lakebase list_sessions failed for user %s: %s", user_id, e)
         return []
 
     out: list[dict] = []
@@ -244,15 +270,17 @@ def load_trajectory(session_id: str) -> dict | None:
     pool = get_pool()
     if pool is None:
         return None
+    def _query(conn):
+        return conn.execute(
+            "SELECT user_id, trajectory FROM databricks_ai_intern_sessions "
+            "WHERE session_id = %s",
+            (session_id,),
+        ).fetchone()
+
     try:
-        with pool.connection() as conn:
-            row = conn.execute(
-                "SELECT user_id, trajectory FROM databricks_ai_intern_sessions "
-                "WHERE session_id = %s",
-                (session_id,),
-            ).fetchone()
+        row = _execute_with_retry(pool, "load_trajectory", _query)
     except Exception as e:
-        logger.debug("load_trajectory suppressed: %s", e)
+        logger.warning("Lakebase load_trajectory failed for session %s: %s", session_id, e)
         return None
     if row is None:
         return None

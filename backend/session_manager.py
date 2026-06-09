@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -38,42 +40,92 @@ class Submission:
 logger = logging.getLogger(__name__)
 
 
+# Pushed to subscriber queues when the broadcaster shuts down or drops a
+# subscriber; SSE handlers treat it as end-of-stream.
+BROADCAST_CLOSED = object()
+
+_SUBSCRIBER_QUEUE_MAXSIZE = 1000
+_SUBSCRIPTION_MAX_AGE_SECONDS = 2 * 60 * 60
+
+
 class EventBroadcaster:
     """Reads from the agent's event queue and fans out to SSE subscribers.
 
     Events that arrive when no subscribers are listening are discarded.
     With SSE each turn is a separate request, so there is no reconnect
     scenario that would need buffered replay.
+
+    Subscriber queues are bounded: a subscriber that falls a full queue
+    behind is dropped rather than blocking the broadcast loop, and
+    subscriptions older than ``_SUBSCRIPTION_MAX_AGE_SECONDS`` are culled
+    on each broadcast pass.
     """
 
     def __init__(self, event_queue: asyncio.Queue):
         self._source = event_queue
         self._subscribers: dict[int, asyncio.Queue] = {}
+        self._subscribed_at: dict[int, float] = {}
         self._counter = 0
+        self._closed = False
 
     def subscribe(self) -> tuple[int, asyncio.Queue]:
         """Create a new subscriber. Returns (id, queue)."""
         self._counter += 1
         sub_id = self._counter
-        q: asyncio.Queue = asyncio.Queue()
+        q: asyncio.Queue = asyncio.Queue(maxsize=_SUBSCRIBER_QUEUE_MAXSIZE)
+        if self._closed:
+            # Broadcaster already torn down — hand back an end-of-stream
+            # marker so the subscriber exits immediately.
+            q.put_nowait(BROADCAST_CLOSED)
+            return sub_id, q
         self._subscribers[sub_id] = q
+        self._subscribed_at[sub_id] = time.monotonic()
         return sub_id, q
 
     def unsubscribe(self, sub_id: int) -> None:
         self._subscribers.pop(sub_id, None)
+        self._subscribed_at.pop(sub_id, None)
+
+    def close(self) -> None:
+        """Signal end-of-stream to all subscribers. Idempotent."""
+        self._closed = True
+        for sub_id in list(self._subscribers):
+            self._drop(sub_id, reason=None)
+
+    def _drop(self, sub_id: int, reason: str | None) -> None:
+        q = self._subscribers.get(sub_id)
+        self.unsubscribe(sub_id)
+        if reason:
+            logger.warning(f"Dropping SSE subscriber {sub_id}: {reason}")
+        if q is not None:
+            try:
+                q.put_nowait(BROADCAST_CLOSED)
+            except asyncio.QueueFull:
+                pass
 
     async def run(self) -> None:
         """Main loop — reads from source queue and broadcasts."""
-        while True:
-            try:
-                event: Event = await self._source.get()
-                msg = {"event_type": event.event_type, "data": event.data}
-                for q in self._subscribers.values():
-                    await q.put(msg)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"EventBroadcaster error: {e}")
+        try:
+            while True:
+                try:
+                    event: Event = await self._source.get()
+                    msg = {"event_type": event.event_type, "data": event.data}
+                    now = time.monotonic()
+                    for sub_id, q in list(self._subscribers.items()):
+                        age = now - self._subscribed_at.get(sub_id, now)
+                        if age > _SUBSCRIPTION_MAX_AGE_SECONDS:
+                            self._drop(sub_id, reason="subscription exceeded max age")
+                            continue
+                        try:
+                            q.put_nowait(msg)
+                        except asyncio.QueueFull:
+                            self._drop(sub_id, reason="queue full (slow consumer)")
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"EventBroadcaster error: {e}")
+        finally:
+            self.close()
 
 
 @dataclass
@@ -103,7 +155,7 @@ class SessionCapacityError(Exception):
 
 
 # ── Capacity limits ─────────────────────────────────────────────────
-# Sized for HF Spaces 8 vCPU / 32 GB RAM.
+# Sized for an 8 vCPU / 32 GB RAM container.
 # Each session uses ~10-20 MB (context, tools, queues, task); 200 × 20 MB
 # = 4 GB worst case, leaving plenty of headroom for the Python runtime
 # and per-request overhead.
@@ -464,7 +516,12 @@ class SessionManager:
         if not agent_session:
             return False
 
-        # Clean up sandbox Space before cancelling the task
+        # Signal end-of-stream to any live SSE subscribers before tearing
+        # the broadcaster down, so their handlers exit cleanly.
+        if agent_session.broadcaster is not None:
+            agent_session.broadcaster.close()
+
+        # Clean up sandbox before cancelling the task
         await self._cleanup_sandbox(agent_session.session)
 
         # Cancel the task if running
@@ -489,14 +546,19 @@ class SessionManager:
 
         Returns True if:
         - The session exists AND the user owns it
-        - The user_id is "dev" (dev mode bypass)
+        - Dev-mode bypass: user_id or owner is "dev" AND the app is NOT
+          running behind the Apps proxy (same signal dependencies.py uses)
         """
         owner = self.get_session_owner(session_id)
         if owner is None:
             return False
-        if user_id == "dev" or owner == "dev":
+        if owner == user_id:
             return True
-        return owner == user_id
+        apps_mode = bool(
+            os.environ.get("DATABRICKS_APP_NAME")
+            or os.environ.get("DATABRICKS_WORKSPACE_ID")
+        )
+        return not apps_mode and (user_id == "dev" or owner == "dev")
 
     def get_session_info(self, session_id: str) -> dict[str, Any] | None:
         """Get information about a session."""

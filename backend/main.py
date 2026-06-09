@@ -1,4 +1,4 @@
-"""FastAPI application for HF Agent web interface."""
+"""FastAPI application for the Databricks AI Intern web interface."""
 
 import logging
 import os
@@ -58,13 +58,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="HF Agent",
+    title="Databricks AI Intern",
     description="ML Engineering Assistant API",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# CORS middleware for development
+# Apps runtime signal — same one dependencies.py uses.
+_APPS_MODE = bool(
+    os.environ.get("DATABRICKS_APP_NAME") or os.environ.get("DATABRICKS_WORKSPACE_ID")
+)
+
+# CORS: wide open for local dev (Vite on another port); in Apps mode the
+# frontend is same-origin, so restrict to what it actually uses.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -74,8 +80,8 @@ app.add_middleware(
         "http://127.0.0.1:3000",
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"] if _APPS_MODE else ["*"],
+    allow_headers=["content-type", "authorization"] if _APPS_MODE else ["*"],
 )
 
 # Include routers
@@ -95,7 +101,7 @@ else:
 async def api_root():
     """API root endpoint."""
     return {
-        "name": "HF Agent API",
+        "name": "Databricks AI Intern API",
         "version": "1.0.0",
         "docs": "/docs",
     }

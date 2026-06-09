@@ -1,1 +1,1 @@
-# Backend package for HF Agent web interface
+# Backend package for the Databricks AI Intern web interface

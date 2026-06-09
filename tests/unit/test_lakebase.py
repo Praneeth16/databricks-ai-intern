@@ -46,6 +46,43 @@ def test_helpers_noop_without_pool():
     lakebase.mark_session_inactive("s1")
 
 
+def test_upsert_retries_once_on_operational_error(monkeypatch):
+    psycopg = pytest.importorskip("psycopg")
+
+    executed = []
+
+    class _Conn:
+        def execute(self, *args):
+            executed.append(args)
+
+    class _Ctx:
+        def __init__(self, fail: bool):
+            self._fail = fail
+
+        def __enter__(self):
+            if self._fail:
+                raise psycopg.OperationalError("connection stranded")
+            return _Conn()
+
+        def __exit__(self, *exc):
+            return False
+
+    class _Pool:
+        attempts = 0
+
+        def connection(self):
+            self.attempts += 1
+            return _Ctx(fail=self.attempts == 1)
+
+    pool = _Pool()
+    monkeypatch.setattr(lakebase, "_POOL", pool)
+    lakebase.upsert_session(
+        session_id="s1", user_id="u1", user_email=None, model_name="m",
+    )
+    assert pool.attempts == 2
+    assert len(executed) == 1
+
+
 def test_init_swallows_pool_construction_failure():
     cfg = _config(lakebase_instance="databricks-ai-intern-state")
     with patch(
