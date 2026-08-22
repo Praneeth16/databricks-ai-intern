@@ -9,11 +9,12 @@ subprocess/pathlib instead of going through a remote sandbox.
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from agent.tools.truncation import strip_ansi, truncate_output
 
 
 MAX_OUTPUT_CHARS = 25_000
@@ -22,7 +23,6 @@ DEFAULT_READ_LINES = 2000
 DEFAULT_TIMEOUT = 120
 MAX_TIMEOUT = 36000  # 10 hours — needed for long training runs (e.g. PostTrainBench)
 
-_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07')
 
 # Track files that have been read this session (enforces read-before-write/edit)
 _files_read: set[str] = set()
@@ -63,32 +63,12 @@ def _atomic_write(path: Path, content: str) -> None:
 
 
 def _strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub('', text)
+    return strip_ansi(text)
 
 
 def _truncate_output(output: str, max_chars: int = MAX_OUTPUT_CHARS, head_ratio: float = 0.25) -> str:
     """Tail-biased truncation with temp file spillover for full output access."""
-    if len(output) <= max_chars:
-        return output
-    # Write full output to temp file so LLM can read specific sections
-    spill_path = None
-    try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', prefix='bash_output_', delete=False) as f:
-            f.write(output)
-            spill_path = f.name
-    except Exception:
-        pass
-    head_budget = int(max_chars * head_ratio)
-    tail_budget = max_chars - head_budget
-    head = output[:head_budget]
-    tail = output[-tail_budget:]
-    total = len(output)
-    omitted = total - max_chars
-    meta = f"\n\n... ({omitted:,} of {total:,} chars omitted, showing first {head_budget:,} + last {tail_budget:,}) ...\n"
-    if spill_path:
-        meta += f"Full output saved to {spill_path} — use the read tool with offset/limit to inspect specific sections.\n"
-    meta += "IMPORTANT: The command has finished. Analyze the output above and continue with your next action.\n"
-    return head + meta + tail
+    return truncate_output(output, max_chars, head_ratio, prefix='bash_output_')
 
 
 # ── Handlers ────────────────────────────────────────────────────────────
