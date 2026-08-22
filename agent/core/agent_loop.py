@@ -907,7 +907,13 @@ class Handlers:
 
                 # If output was truncated, all tool call args are garbage.
                 # Inject a system hint so the LLM retries with smaller content.
-                if finish_reason == "length" and tool_calls_acc:
+                # Handle a length-truncated response whether or not any partial tool call
+                # was accumulated. The `and tool_calls_acc` version of this guard missed
+                # the commonest case: the model gets cut off while still composing prose
+                # or a long script, emits NO tool call at all, and the loop then falls
+                # through to the text-only path and ends the turn. The run looks
+                # successful and the work is silently discarded mid-sentence.
+                if finish_reason == "length":
                     dropped_names = [
                         tc["function"]["name"]
                         for tc in tool_calls_acc.values()
@@ -915,20 +921,30 @@ class Handlers:
                     ]
                     logger.warning(
                         "Output truncated (finish_reason=length) — dropping tool calls: %s",
-                        dropped_names,
+                        dropped_names or "(none accumulated)",
                     )
                     tool_calls_acc.clear()
 
                     # Tell the agent what happened so it can retry differently
-                    truncation_hint = (
-                        "Your previous response was truncated because the output hit the "
-                        "token limit. The following tool calls were lost: "
-                        f"{dropped_names}. "
-                        "IMPORTANT: Do NOT retry with the same large content. Instead:\n"
-                        "  • For 'write': use bash with cat<<'HEREDOC' to write the file, "
-                        "or split into several smaller edit calls.\n"
-                        "  • For other tools: reduce the size of your arguments or use bash."
-                    )
+                    if dropped_names:
+                        truncation_hint = (
+                            "Your previous response was truncated because the output hit the "
+                            "token limit. The following tool calls were lost: "
+                            f"{dropped_names}. "
+                            "IMPORTANT: Do NOT retry with the same large content. Instead:\n"
+                            "  • For 'write': use bash with cat<<'HEREDOC' to write the file, "
+                            "or split into several smaller edit calls.\n"
+                            "  • For other tools: reduce the size of your arguments or use bash."
+                        )
+                    else:
+                        truncation_hint = (
+                            "Your previous response hit the output token limit before you "
+                            "made any tool call, so nothing was executed and the text was "
+                            "discarded. Do NOT re-plan from scratch and do NOT write long "
+                            "content directly in your reply. Instead make one small tool "
+                            "call now, and build large files incrementally — bash with "
+                            "cat<<'HEREDOC' for a first chunk, then append or edit."
+                        )
                     if content:
                         assistant_msg = _assistant_message_from_result(
                             llm_result, model_name=llm_params.get("model"),
