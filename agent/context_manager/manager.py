@@ -104,6 +104,10 @@ _COMPACT_PROMPT = (
 # the next pass has a chance of bringing usage below threshold.
 _MAX_TOKENS_PER_MESSAGE = 50_000
 
+# Chars kept from a stale tool result when compaction prunes it. Enough to keep what the
+# result *was* and how it ended, without the body the agent has already acted on.
+_TOOL_RESULT_PRUNE_KEEP_CHARS = 400
+
 
 class CompactionFailedError(Exception):
     """Raised when compaction can't reduce context below the threshold.
@@ -481,6 +485,60 @@ class ContextManager:
             out.append(Message(role=msg.role, content=placeholder, **kept))
         return out
 
+    def _prune_stale_tool_results(self, model_name: str) -> int:
+        """Elide bodies of tool results older than the untouched tail.
+
+        This is deepseek's first compaction phase
+        (`packages/compaction/`, tool-result pruning before summary selection), and it
+        runs before summarization for two reasons. It is free — no LLM call, where
+        summarizing costs one — and it is less lossy, because a stale `ls` dump or CSV
+        body is exactly the content whose *details* stop mattering once the agent has
+        acted on it, while the reasoning around it still matters.
+
+        `_truncate_oversized` does not cover this: it only fires on single messages above
+        `_MAX_TOKENS_PER_MESSAGE` (50k tokens). A hundred 2k-token tool results trip
+        nothing there and still consume 200k tokens.
+
+        Returns the number of messages pruned.
+        """
+        cutoff = len(self.items) - self.untouched_messages
+        if cutoff <= 1:
+            return 0
+
+        pruned = 0
+        for i in range(1, cutoff):
+            msg = self.items[i]
+            if getattr(msg, "role", None) != "tool":
+                continue
+            content = getattr(msg, "content", None)
+            if not isinstance(content, str) or len(content) <= _TOOL_RESULT_PRUNE_KEEP_CHARS:
+                continue
+            elided = len(content) - _TOOL_RESULT_PRUNE_KEEP_CHARS
+            placeholder = (
+                content[:_TOOL_RESULT_PRUNE_KEEP_CHARS]
+                + f"\n... [{elided:,} chars of this tool result elided during compaction]"
+            )
+            # Same field preservation as _truncate_oversized: dropping tool_call_id
+            # orphans the assistant tool_call and the next request 400s.
+            kept = {
+                k: getattr(msg, k, None)
+                for k in ("tool_call_id", "tool_calls", "name",
+                          "thinking_blocks", "reasoning_content",
+                          "provider_specific_fields")
+                if getattr(msg, k, None) is not None
+            }
+            self.items[i] = Message(role=msg.role, content=placeholder, **kept)
+            pruned += 1
+
+        if pruned:
+            before = self.running_context_usage
+            self._recompute_usage(model_name)
+            logger.info(
+                "Compaction phase 1: pruned %d stale tool result(s), %d -> %d tokens",
+                pruned, before, self.running_context_usage,
+            )
+        return pruned
+
     def _recompute_usage(self, model_name: str) -> None:
         """Refresh ``running_context_usage`` from current items via real tokenizer.
 
@@ -532,6 +590,12 @@ class ContextManager:
         compaction LLM call) can land without changing every caller.
         """
         if not self.needs_compaction:
+            return
+
+        # Phase 1: prune stale tool-result bodies. If that alone gets us under the
+        # threshold we are done, and we have skipped a summarization LLM call entirely.
+        if self._prune_stale_tool_results(model_name) and not self.needs_compaction:
+            logger.info("Compaction satisfied by tool-result pruning; no summary needed")
             return
 
         system_msg = (
