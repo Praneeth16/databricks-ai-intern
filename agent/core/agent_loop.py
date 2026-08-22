@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -128,8 +129,15 @@ def _needs_approval(
 
 
 # -- LLM retry constants --------------------------------------------------
+# Bounded budget for errors the server chose to return (rate limits, 5xx). Retrying a
+# request the server understood and rejected more than a few times just burns budget.
 _MAX_LLM_RETRIES = 3
-_LLM_RETRY_DELAYS = [5, 15, 30]  # seconds between retries
+# Connection failures get a far larger budget: nothing was rejected, the pipe broke.
+# At capped-exponential backoff this rides out roughly ten minutes of workspace
+# flakiness, which matters when a turn is polling a long Databricks job.
+_MAX_CONNECTION_RETRIES = 12
+_RETRY_BASE_DELAY = 5   # seconds; doubles per attempt
+_MAX_RETRY_DELAY = 60   # seconds; ceiling on the doubling
 
 # -- No-tool continuation guard (HF upstream #237) -----------------------
 # Cap retry attempts when a text-only response tries to stop with plan
@@ -183,20 +191,117 @@ def _no_tool_incomplete_plan_prompt(items: list[dict[str, str]]) -> str:
     )
 
 
+_CONNECTION_PATTERNS = (
+    "connection reset", "connection refused", "connection error", "connection aborted",
+    "eof", "broken pipe", "timeout", "timed out", "temporarily unavailable",
+)
+_RATE_LIMIT_PATTERNS = ("429", "rate limit", "rate_limit", "too many requests")
+_SERVER_PATTERNS = (
+    "503", "service unavailable", "502", "bad gateway",
+    "500", "internal server error", "overloaded", "capacity",
+)
+
+
+def _classify_error(error: Exception) -> str:
+    """Bucket an LLM error as 'connection', 'rate_limit', 'server', or 'fatal'.
+
+    Codex draws this distinction (`codex-rs/core/src/responses_retry.rs`) because the
+    buckets deserve different budgets: a workspace blip during a 40-minute job poll
+    should not end the session, while a malformed request retried three times is just
+    three identical failures.
+    """
+    err_str = str(error).lower()
+    if any(p in err_str for p in _RATE_LIMIT_PATTERNS):
+        return "rate_limit"
+    if any(p in err_str for p in _CONNECTION_PATTERNS):
+        return "connection"
+    if any(p in err_str for p in _SERVER_PATTERNS):
+        return "server"
+    return "fatal"
+
+
 def _is_transient_error(error: Exception) -> bool:
     """Return True for errors that are likely transient and worth retrying."""
-    err_str = str(error).lower()
-    transient_patterns = [
-        "timeout", "timed out",
-        "429", "rate limit", "rate_limit",
-        "503", "service unavailable",
-        "502", "bad gateway",
-        "500", "internal server error",
-        "overloaded", "capacity",
-        "connection reset", "connection refused", "connection error",
-        "eof", "broken pipe",
-    ]
-    return any(pattern in err_str for pattern in transient_patterns)
+    return _classify_error(error) != "fatal"
+
+
+def _retry_after_seconds(error: Exception) -> float | None:
+    """Honour a server-supplied Retry-After, from headers or the error text.
+
+    Guessing a backoff when the server told us the answer is how you earn a second 429.
+    """
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None) or {}
+    try:
+        for key in ("retry-after", "Retry-After", "x-ratelimit-reset-requests"):
+            if key in headers:
+                return max(0.0, float(str(headers[key]).strip()))
+    except (TypeError, ValueError):
+        pass
+    match = re.search(r"retry[-_ ]?after[\"':\s]+(\d+(?:\.\d+)?)", str(error), re.IGNORECASE)
+    if match:
+        try:
+            return max(0.0, float(match.group(1)))
+        except ValueError:
+            return None
+    return None
+
+
+def _retry_budget(kind: str) -> int:
+    """How many attempts a given error class gets."""
+    return _MAX_CONNECTION_RETRIES if kind == "connection" else _MAX_LLM_RETRIES
+
+
+def _backoff_delay(kind: str, attempt: int, error: Exception) -> float:
+    """Capped exponential backoff, overridden by Retry-After when the server sent one."""
+    if kind == "rate_limit":
+        hinted = _retry_after_seconds(error)
+        if hinted is not None:
+            return min(hinted, _MAX_RETRY_DELAY)
+    return float(min(_RETRY_BASE_DELAY * (2 ** attempt), _MAX_RETRY_DELAY))
+
+
+async def _acompletion_with_retry(session: Session, llm_params: dict, **call_kwargs):
+    """Call ``acompletion`` with classification-aware retry.
+
+    Shared by the streaming and non-streaming paths, which previously carried
+    byte-identical copies of this block — so a fix to one silently missed the other.
+
+    Returns ``(response, llm_params)``; ``llm_params`` may have been healed if the
+    reasoning-effort probe had to adjust it mid-call.
+    """
+    healed_effort = False  # one-shot safety net per call
+    attempt = 0
+    while True:
+        try:
+            return await acompletion(**call_kwargs, **llm_params), llm_params
+        except ContextWindowExceededError:
+            raise
+        except Exception as e:
+            if not healed_effort and _is_effort_config_error(e):
+                healed_effort = True
+                llm_params = await _heal_effort_and_rebuild_params(session, e, llm_params)
+                await session.send_event(Event(
+                    event_type="tool_log",
+                    data={"tool": "system", "log": "Reasoning effort not supported for this model — adjusting and retrying."},
+                ))
+                continue
+
+            kind = _classify_error(e)
+            budget = _retry_budget(kind)
+            if kind == "fatal" or attempt >= budget - 1:
+                raise
+            delay = _backoff_delay(kind, attempt, e)
+            logger.warning(
+                "Transient LLM error [%s] (attempt %d/%d): %s — retrying in %.1fs",
+                kind, attempt + 1, budget, e, delay,
+            )
+            await session.send_event(Event(
+                event_type="tool_log",
+                data={"tool": "system", "log": f"LLM {kind} error, retrying in {delay:.0f}s..."},
+            ))
+            await asyncio.sleep(delay)
+            attempt += 1
 
 
 def _is_effort_config_error(error: Exception) -> bool:
@@ -480,46 +585,18 @@ def _assistant_message_from_result(
 
 async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> LLMResult:
     """Call the LLM with streaming, emitting assistant_chunk events."""
-    response = None
-    _healed_effort = False  # one-shot safety net per call
     messages, tools = with_prompt_caching(messages, tools, llm_params.get("model"))
     t_start = time.monotonic()
-    for _llm_attempt in range(_MAX_LLM_RETRIES):
-        try:
-            response = await acompletion(
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                stream=True,
-                stream_options={"include_usage": True},
-                timeout=600,
-                **llm_params,
-            )
-            break
-        except ContextWindowExceededError:
-            raise
-        except Exception as e:
-            if not _healed_effort and _is_effort_config_error(e):
-                _healed_effort = True
-                llm_params = await _heal_effort_and_rebuild_params(session, e, llm_params)
-                await session.send_event(Event(
-                    event_type="tool_log",
-                    data={"tool": "system", "log": "Reasoning effort not supported for this model — adjusting and retrying."},
-                ))
-                continue
-            if _llm_attempt < _MAX_LLM_RETRIES - 1 and _is_transient_error(e):
-                _delay = _LLM_RETRY_DELAYS[_llm_attempt]
-                logger.warning(
-                    "Transient LLM error (attempt %d/%d): %s — retrying in %ds",
-                    _llm_attempt + 1, _MAX_LLM_RETRIES, e, _delay,
-                )
-                await session.send_event(Event(
-                    event_type="tool_log",
-                    data={"tool": "system", "log": f"LLM connection error, retrying in {_delay}s..."},
-                ))
-                await asyncio.sleep(_delay)
-                continue
-            raise
+    response, llm_params = await _acompletion_with_retry(
+        session,
+        llm_params,
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",
+        stream=True,
+        stream_options={"include_usage": True},
+        timeout=600,
+    )
 
     full_content = ""
     tool_calls_acc: dict[int, dict] = {}
@@ -621,45 +698,17 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
 
 async def _call_llm_non_streaming(session: Session, messages, tools, llm_params) -> LLMResult:
     """Call the LLM without streaming, emit assistant_message at the end."""
-    response = None
-    _healed_effort = False
     messages, tools = with_prompt_caching(messages, tools, llm_params.get("model"))
     t_start = time.monotonic()
-    for _llm_attempt in range(_MAX_LLM_RETRIES):
-        try:
-            response = await acompletion(
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                stream=False,
-                timeout=600,
-                **llm_params,
-            )
-            break
-        except ContextWindowExceededError:
-            raise
-        except Exception as e:
-            if not _healed_effort and _is_effort_config_error(e):
-                _healed_effort = True
-                llm_params = await _heal_effort_and_rebuild_params(session, e, llm_params)
-                await session.send_event(Event(
-                    event_type="tool_log",
-                    data={"tool": "system", "log": "Reasoning effort not supported for this model — adjusting and retrying."},
-                ))
-                continue
-            if _llm_attempt < _MAX_LLM_RETRIES - 1 and _is_transient_error(e):
-                _delay = _LLM_RETRY_DELAYS[_llm_attempt]
-                logger.warning(
-                    "Transient LLM error (attempt %d/%d): %s — retrying in %ds",
-                    _llm_attempt + 1, _MAX_LLM_RETRIES, e, _delay,
-                )
-                await session.send_event(Event(
-                    event_type="tool_log",
-                    data={"tool": "system", "log": f"LLM connection error, retrying in {_delay}s..."},
-                ))
-                await asyncio.sleep(_delay)
-                continue
-            raise
+    response, llm_params = await _acompletion_with_retry(
+        session,
+        llm_params,
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",
+        stream=False,
+        timeout=600,
+    )
 
     choice = response.choices[0]
     message = choice.message
@@ -1141,9 +1190,12 @@ class Handlers:
                         args: dict,
                         valid: bool,
                         err: str,
-                    ) -> tuple[ToolCall, str, dict, str, bool]:
+                    ) -> tuple[ToolCall, str, dict, str, bool, int]:
                         if not valid:
-                            return (tc, name, args, err, False)
+                            return (tc, name, args, err, False, 0)
+                        # Per-tool wall time. Until now only `llm_call` carried latency,
+                        # so a slow turn gave no way to tell which tool ate it.
+                        _t0 = time.monotonic()
                         with tracing.trace_span(
                             f"tool.{name}",
                             attributes={
@@ -1155,7 +1207,11 @@ class Handlers:
                             out, ok = await session.tool_router.call_tool(
                                 name, args, session=session, tool_call_id=tc.id
                             )
-                        return (tc, name, args, out, ok)
+                            _elapsed_ms = (time.monotonic() - _t0) * 1000.0
+                            # Same mechanism the approval path already used; the
+                            # auto-approved path was simply never wired to it.
+                            tracing.record_tool_latency(name, _elapsed_ms, ok=ok)
+                        return (tc, name, args, out, ok, int(_elapsed_ms))
 
                     gather_task = asyncio.ensure_future(asyncio.gather(
                         *[
@@ -1190,7 +1246,7 @@ class Handlers:
                     results = gather_task.result()
 
                     # 4. Record results and send outputs (order preserved)
-                    for tc, tool_name, tool_args, output, success in results:
+                    for tc, tool_name, tool_args, output, success, duration_ms in results:
                         tool_msg = Message(
                             role="tool",
                             content=output,
@@ -1207,6 +1263,7 @@ class Handlers:
                                     "tool_call_id": tc.id,
                                     "output": output,
                                     "success": success,
+                                    "duration_ms": duration_ms,
                                 },
                             )
                         )
@@ -1483,13 +1540,10 @@ class Handlers:
                 output, success = await session.tool_router.call_tool(
                     tool_name, tool_args, session=session, tool_call_id=tc.id
                 )
-                tracing.record_tool_latency(
-                    tool_name,
-                    (time.monotonic() - _tool_t0) * 1000.0,
-                    ok=success,
-                )
+                _elapsed_ms = (time.monotonic() - _tool_t0) * 1000.0
+                tracing.record_tool_latency(tool_name, _elapsed_ms, ok=success)
 
-            return (tc, tool_name, output, success, was_edited)
+            return (tc, tool_name, output, success, was_edited, int(_elapsed_ms))
 
         # Execute all approved tools concurrently (cancellable)
         if approved_tasks:
@@ -1535,7 +1589,7 @@ class Handlers:
                     logger.error(f"Tool execution error: {result}")
                     continue
 
-                tc, tool_name, output, success, was_edited = result
+                tc, tool_name, output, success, was_edited, duration_ms = result
 
                 if was_edited:
                     output = f"[Note: The user edited the script before execution. The output below reflects the user-modified version, not your original script.]\n\n{output}"
@@ -1557,6 +1611,7 @@ class Handlers:
                             "tool_call_id": tc.id,
                             "output": output,
                             "success": success,
+                            "duration_ms": duration_ms,
                         },
                     )
                 )
