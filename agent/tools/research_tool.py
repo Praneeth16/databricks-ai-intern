@@ -215,10 +215,18 @@ RESEARCH_TOOL_SPEC = {
 
 
 def _get_research_model(main_model: str) -> str:
-    """Pick a cheaper model for research based on the main model."""
-    if "anthropic" in main_model:
-        return "bedrock/us.anthropic.claude-sonnet-4-6"
-    # For non-Anthropic models (HF router etc.), use the same model
+    """Pick a cheaper model for research than the one driving the main loop.
+
+    Research is read-only summarisation, so it does not need the top tier. Downshifting
+    Opus to Sonnet on the same platform is the whole intent — the previous version sent
+    Anthropic-prefixed models to Bedrock, which both leaves the Databricks-native path
+    this repo requires and pins an older model generation.
+    """
+    if main_model.startswith("databricks/") and "opus" in main_model:
+        return "databricks/databricks-claude-sonnet-5"
+    if main_model.startswith("anthropic/") and "opus" in main_model:
+        return "anthropic/claude-sonnet-5"
+    # Already a mid-tier or non-Anthropic model — reuse it rather than guess.
     return main_model
 
 
