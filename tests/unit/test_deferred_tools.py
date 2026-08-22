@@ -110,6 +110,56 @@ async def test_calling_a_deferred_tool_directly_promotes_it(router):
     assert "uc_model" in router.active_tools
 
 
+# --------------------------------------------------------------- result contract
+
+
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        ("read_skill", {"name": "kaggle-tabular-classification"}),
+        ("critic", {"operation": "list_detectors"}),
+        ("experiment", {"operation": "list"}),
+        ("sweep", {"operation": "status"}),
+        ("research_loop", {"operation": "status"}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_dict_returning_handlers_still_yield_real_output(router, name, args):
+    """Regression: five handlers return a ToolResult dict, not (str, bool).
+
+    Python unpacks a 2-key dict into its keys, so `out, ok = handler(...)` yielded
+    ("formatted", "isError") — the model got the literal string "formatted" as the
+    tool's entire output while the logs showed success. That silently disabled the
+    skills system, critic, experiment ledger, sweeps, and the research loop.
+    """
+    out, ok = await router.call_tool(name, args)
+    assert isinstance(ok, bool), f"{name} success flag must be a bool, got {ok!r}"
+    assert out not in ("formatted", "isError"), f"{name} leaked a ToolResult key as output"
+    assert len(out) > 20, f"{name} returned suspiciously little: {out!r}"
+
+
+@pytest.mark.asyncio
+async def test_read_skill_returns_the_whole_playbook(router):
+    out, ok = await router.call_tool("read_skill", {"name": "kaggle-tabular-classification"})
+    assert ok
+    assert out.startswith("# Skill: kaggle-tabular-classification")
+    assert len(out) > 5_000, "a playbook this short is not the real thing"
+
+
+def test_normalize_tool_result_shapes():
+    from agent.core.tools import _normalize_tool_result as norm
+
+    assert norm("t", ("hello", True)) == ("hello", True)
+    assert norm("t", {"formatted": "body", "isError": False}) == ("body", True)
+    assert norm("t", {"formatted": "bad", "isError": True}) == ("bad", False)
+    # A dict with no `formatted` key must not silently become an empty result.
+    out, ok = norm("t", {"other": 1, "isError": False})
+    assert "other" in out and ok is True
+    # Unexpected types degrade to a string rather than crashing the turn.
+    out, ok = norm("t", 42)
+    assert out == "42" and ok is True
+
+
 def test_subagent_tool_lists_are_not_filtered_by_deferral(router):
     """Regression: deferral must not silently shrink a sub-agent's curated tool list.
 

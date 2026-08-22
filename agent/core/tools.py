@@ -3,6 +3,7 @@ Tool system for the agent
 Provides ToolSpec and ToolRouter for managing both built-in and MCP tools
 """
 
+import json
 import logging
 import warnings
 from dataclasses import dataclass
@@ -167,6 +168,38 @@ RESIDENT_TOOLS: frozenset[str] = frozenset(
         "tool_search",
     }
 )
+
+
+def _normalize_tool_result(tool_name: str, result: Any) -> tuple[str, bool]:
+    """Coerce whatever a handler returned into the ``(output, success)`` contract.
+
+    Most handlers return ``tuple[str, bool]``, but five — read_skill, critic,
+    experiment, sweep, research_loop — return a ``ToolResult`` dict instead. Python
+    unpacks a 2-key dict into its *keys*, so ``out, ok = handler(...)`` silently yielded
+    ``("formatted", "isError")``: the model received the literal string "formatted" as
+    the tool's entire output, with a truthy "isError" as the success flag. That killed
+    the skills system, the critic, the experiment ledger, and sweeps at the agent
+    boundary while looking like success in the logs.
+
+    Normalising here rather than in each tool fixes all five at once and stops a future
+    handler from reintroducing it, since the dict shape is a reasonable thing to write.
+    """
+    if isinstance(result, tuple) and len(result) == 2:
+        output, ok = result
+        return output if isinstance(output, str) else str(output), bool(ok)
+
+    if isinstance(result, dict):
+        output = result.get("formatted")
+        if output is None:
+            output = json.dumps(result, default=str)
+        logger.debug("Normalized dict result from %s into the (output, ok) contract", tool_name)
+        return str(output), not bool(result.get("isError", False))
+
+    logger.warning(
+        "Tool %s returned %s, expected tuple[str, bool] or a ToolResult dict",
+        tool_name, type(result).__name__,
+    )
+    return str(result), True
 
 
 def sanitize_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -404,7 +437,9 @@ class ToolRouter:
         everything that never set a limit — MCP tools especially, whose output volume we
         do not control.
         """
-        output, ok = await self._dispatch_tool(tool_name, arguments, session, tool_call_id)
+        output, ok = _normalize_tool_result(
+            tool_name, await self._dispatch_tool(tool_name, arguments, session, tool_call_id)
+        )
         if isinstance(output, str) and len(output) > MODEL_FACING_CHAR_CAP:
             original = len(output)
             output = truncate_output(output, prefix=f"{tool_name}_output_")
