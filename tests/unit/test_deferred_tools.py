@@ -110,6 +110,37 @@ async def test_calling_a_deferred_tool_directly_promotes_it(router):
     assert "uc_model" in router.active_tools
 
 
+def test_subagent_tool_lists_are_not_filtered_by_deferral(router):
+    """Regression: deferral must not silently shrink a sub-agent's curated tool list.
+
+    `research_tool` used to build its read-only set by filtering
+    `get_tool_specs_for_llm()`. Once most tools were deferred that returned just
+    bash + read, gutting the research sub-agent. It resolves by name instead now.
+    """
+    from agent.tools.research_tool import RESEARCH_TOOL_NAMES
+
+    specs = router.get_tool_specs_by_name(RESEARCH_TOOL_NAMES)
+    names = {s["function"]["name"] for s in specs}
+    # Every named tool that is actually registered must come back, deferred or not.
+    expected = {n for n in RESEARCH_TOOL_NAMES if n in router.tools}
+    assert names == expected
+    assert len(names) > 2, "research sub-agent should get far more than bash + read"
+    # And these really are deferred, so the test is exercising the interesting path.
+    assert "hf_papers" not in router.active_tools
+
+
+def test_get_tool_specs_by_name_ignores_unknown_names(router):
+    specs = router.get_tool_specs_by_name({"bash", "definitely_not_a_tool"})
+    assert {s["function"]["name"] for s in specs} == {"bash"}
+
+
+def test_get_tool_specs_by_name_does_not_promote(router):
+    """Handing a sub-agent a tool must not change what the main loop advertises."""
+    before = set(router.active_tools)
+    router.get_tool_specs_by_name({"hf_papers"})
+    assert set(router.active_tools) == before
+
+
 def test_catalog_lists_every_deferred_tool(router):
     catalog = build_catalog(router.deferred_tools())
     for name in router.deferred_tools():

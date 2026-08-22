@@ -201,6 +201,51 @@ def advise_from_script(
     return warnings
 
 
+COMPUTE_ADVICE_TOOL_SPEC: dict[str, object] = {
+    "name": "compute_advice",
+    "description": (
+        "Ask whether a training job should run on CPU or GPU, and get the reason plus any "
+        "warnings. Call this BEFORE submitting a databricks_jobs run so you pick the right "
+        "`kind` first time. Tabular gradient boosting at normal competition scale belongs on "
+        "CPU: it is faster than GPU below roughly 10M rows and much cheaper, and LightGBM "
+        "cannot use GPU on the Databricks serverless GPU image at all (no OpenCL). Reach for "
+        "GPU when the model does gradient descent on dense tensors (transformer, CNN, "
+        "MLP/TabM, any fine-tune)."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task_shape": {
+                "type": "string",
+                "enum": ["tabular", "nlp", "cv", "finetune"],
+                "description": "Shape of the learning problem.",
+            },
+            "model_family": {
+                "type": "string",
+                "description": "Library or architecture, e.g. lightgbm, xgboost, catboost, torch, transformers, tabm.",
+            },
+            "n_rows": {"type": "integer", "description": "Training row count, if known."},
+            "n_features": {"type": "integer", "description": "Feature count after engineering, if known."},
+        },
+        "required": ["task_shape"],
+    },
+}
+
+
+async def compute_advice_handler(args: dict, **_kw) -> tuple[str, bool]:
+    """Tool wrapper over `recommend_compute`. Pure advice — it launches nothing."""
+    try:
+        rec = recommend_compute(
+            task_shape=args.get("task_shape") or "",
+            model_family=args.get("model_family"),
+            n_rows=args.get("n_rows"),
+            n_features=args.get("n_features"),
+        )
+    except Exception as e:  # keep a bad argument from ending the turn
+        return f"compute_advice failed: {e}", False
+    return rec.render(), True
+
+
 def _is_gpu_flavor(hardware_flavor: str | None, node_type_id: str | None) -> bool:
     flavor = (hardware_flavor or "").lower()
     if flavor:

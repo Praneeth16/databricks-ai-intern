@@ -23,11 +23,13 @@ TOOL_SEARCH_TOOL_SPEC: dict[str, Any] = {
     "name": "tool_search",
     # Description is rewritten at router init to append the live deferred-tool catalog.
     "description": (
-        "Fetch the full parameter schemas for deferred tools so you can call them. "
-        "Deferred tools are listed by name below; until you fetch one, you only know its "
-        "name and summary, not its arguments. Query by keywords (\"kaggle dataset volume\") "
-        "or select exact names with \"select:name_one,name_two\". Once fetched, a tool stays "
-        "available for the rest of the session."
+        "Fetch the full parameter schemas for DEFERRED tools so you can call them. "
+        "Only the tools listed at the end of this description are deferred — every other "
+        "tool you can already see in your tool list is active and callable right now, so "
+        "do NOT call tool_search for those; it wastes a turn. For a deferred tool you know "
+        "only its name and summary until you fetch it, not its arguments. Query by keywords "
+        "(\"model serving endpoint\") or select exact names with \"select:name_one,name_two\". "
+        "Once fetched, a tool stays callable for the rest of the session."
     ),
     "parameters": {
         "type": "object",
@@ -66,7 +68,8 @@ def build_catalog(deferred: dict[str, str]) -> str:
         return ""
     lines = [f"  - {name}: {_summary(desc)}" for name, desc in sorted(deferred.items())]
     return (
-        "\n\nDeferred tools available to fetch (name: what it does):\n"
+        "\n\nDEFERRED TOOLS — these are the only names tool_search accepts. "
+        "Anything not on this list is already active and should be called directly:\n"
         + "\n".join(lines)
     )
 

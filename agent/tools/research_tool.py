@@ -267,12 +267,11 @@ async def research_handler(
         reasoning_effort=_capped,
     )
 
-    # Get read-only tool specs from the session's tool router
-    tool_specs = [
-        spec
-        for spec in session.tool_router.get_tool_specs_for_llm()
-        if spec["function"]["name"] in RESEARCH_TOOL_NAMES
-    ]
+    # Read-only tool specs for the sub-agent. Resolved by name across every registered
+    # tool, NOT from the main loop's advertised set: most of these are deferred behind
+    # tool_search, so filtering the advertised list would hand the researcher only
+    # whatever the parent turn happened to have loaded (in practice just bash + read).
+    tool_specs = session.tool_router.get_tool_specs_by_name(RESEARCH_TOOL_NAMES)
 
     # Unique ID + short label so parallel agents show separate status lines.
     # Use the tool_call_id when available — it's unique per invocation and lets

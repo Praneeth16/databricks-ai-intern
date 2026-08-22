@@ -42,6 +42,10 @@ from agent.tools.papers_tool import HF_PAPERS_TOOL_SPEC, hf_papers_handler
 from agent.tools.read_skill_tool import READ_SKILL_TOOL_SPEC, read_skill_handler
 from agent.tools.experiment_tool import EXPERIMENT_TOOL_SPEC, experiment_handler
 from agent.tools.sweep_tool import SWEEP_TOOL_SPEC, sweep_handler
+from agent.core.compute_advisor import (
+    COMPUTE_ADVICE_TOOL_SPEC,
+    compute_advice_handler,
+)
 from agent.tools.tool_search import (
     TOOL_SEARCH_TOOL_SPEC,
     build_catalog,
@@ -157,6 +161,8 @@ RESIDENT_TOOLS: frozenset[str] = frozenset(
         "databricks_jobs",
         # Domain playbooks; cheap and steers everything after it.
         "read_skill",
+        # Tiny schema, and must be consulted BEFORE the first job submission.
+        "compute_advice",
         # Always resident by construction.
         "tool_search",
     }
@@ -262,6 +268,28 @@ class ToolRouter:
                 handler=tool_search_handler,
             )
         )
+
+    def get_tool_specs_by_name(self, names: set[str]) -> list[dict[str, Any]]:
+        """Specs for named tools, ignoring whether they're advertised to the main loop.
+
+        Deferral exists to keep the *main* loop's per-request schema budget down. A
+        sub-agent that is handed an explicit, curated tool list (see
+        ``research_tool.RESEARCH_TOOL_NAMES``) has its own context and should get every
+        tool on that list — filtering it through the advertised set would silently strip
+        it down to whatever the main loop happened to have loaded.
+        """
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                },
+            }
+            for name, tool in self.tools.items()
+            if name in names
+        ]
 
     def deferred_tools(self) -> dict[str, str]:
         """Registered-but-not-advertised tools, as {name: description}."""
@@ -483,6 +511,13 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
             description=READ_SKILL_TOOL_SPEC["description"],
             parameters=READ_SKILL_TOOL_SPEC["parameters"],
             handler=read_skill_handler,
+        ),
+        # Which compute a training job belongs on (CPU vs GPU) — advice only.
+        ToolSpec(
+            name=COMPUTE_ADVICE_TOOL_SPEC["name"],
+            description=COMPUTE_ADVICE_TOOL_SPEC["description"],
+            parameters=COMPUTE_ADVICE_TOOL_SPEC["parameters"],
+            handler=compute_advice_handler,
         ),
         # Planning and job management tools
         ToolSpec(
