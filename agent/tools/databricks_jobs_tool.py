@@ -26,6 +26,7 @@ import os
 import re
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Literal, Optional
 
 from agent.core import db_client
@@ -137,6 +138,56 @@ def _filter_agent_env(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
             continue
         out[k] = v
     return out
+
+
+# A script whose entire body is a stub marker. Anchored and whole-body on purpose: a
+# real script may well contain the word "placeholder" in a comment or a string.
+# `\b` cannot follow `...` (a dot is not a word character), so ellipsis-only bodies get
+# their own alternative rather than being folded into the keyword list.
+_PLACEHOLDER_RE = re.compile(
+    r"^(?:(?:#\s*)?(?:placeholder|todo|tbd|fixme|pass)\b[\s.…]*|[.…]{2,})$",
+    re.IGNORECASE,
+)
+
+
+def _load_script_text(args: Dict[str, Any]) -> Optional[str]:
+    """Resolve the job's Python source from ``script`` or ``script_path``.
+
+    ``script_path`` exists because the only other way to submit a long script is to
+    re-emit the whole file as an inline tool argument, which exhausts the model's output
+    budget. The observed failure was not a clean error either: the agent authored a real
+    script to local disk, could not hand it over, and submitted
+    ``script: "PLACEHOLDER"`` — which staged and ran, wasting cluster time. Authoring in
+    chunks to a file and passing the path costs a handful of tokens.
+
+    Also rejects stub scripts up front, before a workspace write and a cluster start.
+    """
+    script = args.get("script")
+    script_path = args.get("script_path")
+
+    if script_path and not script:
+        local = Path(script_path).expanduser()
+        if not local.is_file():
+            raise ValueError(f"script_path {script_path!r} is not a readable file.")
+        script = local.read_text(encoding="utf-8")
+        args.setdefault("filename", local.name)
+
+    if script is None:
+        return None
+
+    stripped = script.strip()
+    if not stripped:
+        raise ValueError("Script is empty.")
+    # Match the stub text itself rather than gating on length: `print('hi')` is a
+    # perfectly legitimate short job, so a character minimum rejects real scripts while
+    # still missing a long, elaborate stub.
+    if _PLACEHOLDER_RE.match(stripped):
+        raise ValueError(
+            "Refusing to submit a placeholder script. Write the real script to a local "
+            "file and pass `script_path` (author it in chunks with bash if it is long), "
+            "or pass the full source as `script`."
+        )
+    return script
 
 
 def _parse_timeout(s: Optional[str]) -> int:
@@ -357,7 +408,7 @@ class DatabricksJobsTool:
         # Advisory only: flag compute that contradicts what the script does, before we
         # spend job-minutes finding out. The s6e5 run lost a job to LightGBM-on-GPU.
         compute_warnings = advise_from_script(
-            args.get("script"),
+            _load_script_text(args),
             kind,
             args.get("hardware_flavor"),
             args.get("node_type_id"),
@@ -527,9 +578,10 @@ class DatabricksJobsTool:
         """
         if args.get("workspace_path"):
             return args["workspace_path"]
-        script = args.get("script")
+
+        script = _load_script_text(args)
         if not script:
-            raise ValueError("Provide either `workspace_path` or `script`.")
+            raise ValueError("Provide one of `workspace_path`, `script`, or `script_path`.")
 
         filename = args.get("filename") or "train.py"
         if not re.match(r"^[\w.-]+\.py$", filename):
@@ -1083,6 +1135,17 @@ DATABRICKS_JOBS_TOOL_SPEC = {
                 "description": (
                     "Inline Python to run. Staged to Workspace Files at "
                     "/Workspace/Users/<user>/databricks-ai-intern/<session>/<filename>. Mutually exclusive with workspace_path."
+                ),
+            },
+            "script_path": {
+                "type": "string",
+                "description": (
+                    "Path to a script on the LOCAL filesystem (e.g. /tmp/train.py). Its "
+                    "contents are read and staged for you. PREFER THIS for anything longer "
+                    "than a few dozen lines: author the file in chunks with bash "
+                    "(cat > file <<'PY' ... then cat >> file <<'PY'), then pass the path. "
+                    "Passing a long script inline as `script` can exhaust your output token "
+                    "budget mid-call, in which case nothing runs."
                 ),
             },
             "workspace_path": {
