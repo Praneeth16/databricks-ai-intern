@@ -119,8 +119,16 @@ phase is judged against it.
 **Hypothesis:** on a synthetic Playground table where the generator memorised
 value→label, encoding each column's *levels* is worth more than any derived ratio.
 
-Evidence (S6E8): target + frequency encoding was **+0.0023 CV**, the single biggest
-feature win on that competition — larger than every ratio/composition feature combined.
+Evidence (S6E8): target + frequency encoding was **+0.00324 OOF measured here**
+(0.964070 raw -> 0.967309), against +0.0023 reported by published work — the single
+biggest feature win on that competition, and ~3.5x the entire composition/lattice block
+that followed it (+0.00093).
+
+**It also dwarfed hyperparameters, which is the opposite of what I first concluded.**
+Tuning the raw-feature model was worth roughly +0.0008; features were worth ~+0.0042. I
+had decided features were exhausted after three of my *own* feature ideas measured as
+noise. Three failed ideas is evidence about those three ideas — read what the field
+already found before writing off a whole category.
 
 - Cast **all** columns to string levels, **numerics included**. Bounded low-cardinality
   numerics (age had 18 distinct values, notifications 231) leave ~500 rows per level,
