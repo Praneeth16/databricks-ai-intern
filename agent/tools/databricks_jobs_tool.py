@@ -29,6 +29,7 @@ import uuid
 from typing import Any, Awaitable, Callable, Dict, Literal, Optional
 
 from agent.core import db_client
+from agent.core.compute_advisor import advise_from_script
 from agent.core.session import Event
 from agent.tools.types import ToolResult
 
@@ -353,6 +354,17 @@ class DatabricksJobsTool:
                 "Use script | serverless | serverless_gpu | finetune."
             )
 
+        # Advisory only: flag compute that contradicts what the script does, before we
+        # spend job-minutes finding out. The s6e5 run lost a job to LightGBM-on-GPU.
+        compute_warnings = advise_from_script(
+            args.get("script"),
+            kind,
+            args.get("hardware_flavor"),
+            args.get("node_type_id"),
+        )
+        for warning in compute_warnings:
+            await self._log(f"Compute advisory: {warning}")
+
         workspace_path = await self._resolve_or_stage_script(
             args, as_notebook=(kind == "serverless_gpu"),
         )
@@ -384,6 +396,13 @@ class DatabricksJobsTool:
         await self._emit_state(life.lower(), run_id=run_id, url=url, result=result)
 
         log_text = await self._fetch_run_output(run)
+        advisory = (
+            "\n**Compute advisory:**\n"
+            + "\n".join(f"- {w}" for w in compute_warnings)
+            + "\n"
+            if compute_warnings
+            else ""
+        )
         return _ok(
             f"""**Databricks Job ({kind})**
 
@@ -392,7 +411,7 @@ class DatabricksJobsTool:
 **Result:** {result or "—"}
 **Message:** {msg or "—"}
 **View:** {url}
-
+{advisory}
 **Output:**
 ```
 {log_text}
