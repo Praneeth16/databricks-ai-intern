@@ -15,9 +15,9 @@ Second worked example for `databricks-ai-intern`, and the reference layout for
 | Rank at that score | ~594 / 1700 teams |
 | Naive first attempt | 0.96324 — hand-picked params, raw features |
 | LB top | 0.97142 (best score reachable from *published* work: 0.97117) |
-| OOF → LB offset | **+0.00139** measured, against +0.00109–0.00150 predicted |
+| OOF → LB offset | **+0.00139** and **+0.00129** measured, against +0.00109–0.00150 predicted |
 | Compute | **CPU only** — ~10 min for a 5-fold XGBoost over 691k rows |
-| Submissions used | 1 |
+| Submissions used | 2 of 10/day |
 
 Full numbers, the killed hypotheses, and the honest-ceiling argument are in
 [`FINAL_RESULTS.md`](FINAL_RESULTS.md).
@@ -70,13 +70,15 @@ tool that kept returning nine bytes, did the sensible thing and ran
 
 CV is `StratifiedKFold(5, shuffle=True, random_state=42)` on original row order — there
 is no temporal or group column here, so s6e5's "time-holdout is the only valid proxy"
-lesson explicitly does not transfer. Almost all of the 0.005 between the naive attempt
-and a competent model was **hyperparameters, not features**; the one feature move that
-paid was nested target encoding plus frequency encoding over all 12 columns cast to
-string levels, numerics included. Missingness is MCAR, so NaN indicators are worthless
-(measured −0.00001). Three ideas that sounded good — Monte-Carlo marginalisation over
-missing values, constrained `daily`↔`weekend` imputation, and mixing in the original
-7,500-row source dataset — all lost, and `FINAL_RESULTS.md` records by how much.
+lesson explicitly does not transfer. Of the ~0.005 between the naive attempt and a
+competent model, the ablation attributes **~+0.0042 to features and ~+0.0008 to
+hyperparameters** — and the feature that carried it was nested target encoding plus
+frequency encoding over all 12 columns cast to string levels, numerics included, worth
++0.0032 on its own. Missingness is MCAR, so NaN indicators are worthless (measured
+−0.00001). Three ideas that sounded good — Monte-Carlo marginalisation over missing
+values, constrained `daily`↔`weekend` imputation, and mixing in the original 7,500-row
+source dataset — all lost, and `FINAL_RESULTS.md` records by how much, including the
+mid-session conclusion of mine that the ablation later overturned.
 
 ## Files
 

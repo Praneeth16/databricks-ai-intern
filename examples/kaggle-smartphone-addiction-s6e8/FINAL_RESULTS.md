@@ -23,6 +23,7 @@ target-encoded columns that are rebuilt inside each fold.
 | v3_lgbm_full_fe | 0.968243 | — | 42 + 12 TE | Same feature set, LightGBM |
 | v2_lgbm_te_freq | 0.967309 | — | 24 + 12 TE | LightGBM, target + frequency encoding only (no composition/lattice) |
 | v5_cat_native | 0.961154 | — | 30 | CatBoost native categoricals + ordered target statistics, no hand-rolled encoding |
+| v1_lgbm_raw | 0.964070 | — | 12 | LightGBM on the 12 raw columns — the params-vs-features ablation |
 | (naive baseline) | 0.96324 | — | 12 | Hand-picked params, raw columns, single holdout — the starting point |
 
 **Best leaderboard score is the single XGBoost model, not the stack.**
@@ -73,21 +74,36 @@ Practical consequence: an OOF gain below roughly 0.0005 will not survive to the
 leaderboard. The single-20%-holdout noise floor I measured is about ±0.0003, and the stack
 is the worked example of a sub-noise "improvement" going the other way in reality.
 
-## Where the ~0.005 actually was
+## Where the ~0.005 actually was — I got this wrong first time
 
-My first attempt scored **0.96324**. A competent single model scores **0.968434**. Almost
-none of that gap was feature engineering:
+Mid-session I concluded the gap was "almost entirely hyperparameters, not features",
+because every feature idea I *invented* measured as noise. The `v1_lgbm_raw` ablation
+says the opposite, and it is the cleaner experiment:
 
-| Change | Effect |
-|---|---|
-| Hyperparameters (lr 0.01–0.02, `num_leaves=127`, `min_child_samples=200`, high `max_bin`) | most of the ~0.005 |
-| Nested target + frequency encoding over all 12 columns as string levels | the single biggest feature win |
-| Composition/ratio features + decimal lattice | small, positive |
-| Everything else I tried | zero or negative — see below |
+| Step | OOF | Delta |
+|---|---|---|
+| Naive first attempt (my params, 12 raw cols, single holdout) | 0.963240 | — |
+| **v1** — 12 raw cols, published-style params, 5-fold | 0.964070 | +0.00083 |
+| **v2** — + nested target encoding + frequency encoding | 0.967309 | **+0.00324** |
+| **v3** — + composition/ratio + decimal lattice | 0.968243 | +0.00093 |
+| **v4** — same features, XGBoost instead of LightGBM | 0.968434 | +0.00019 |
 
-The lesson generalises badly in the flattering direction and well in the useful one: on a
-saturated synthetic tabular competition, reach for the published parameter set before
-inventing features.
+**Features were worth ~+0.00417; hyperparameters ~+0.00083** — roughly five to one the
+other way from what I claimed. (The parameter step compares a single holdout against
+5-fold OOF, so treat it as approximate. The feature steps all share one estimator and one
+split, so those are clean.)
+
+Why I got it backwards: the features I reached for first — NaN indicators, ratio
+features, marginalisation over missing values — were the wrong ones and each measured as
+nothing, so I generalised from three failures to "features don't matter here". The
+feature that *did* matter was target encoding, which I had not tried and which published
+work on this competition had already identified.
+
+The real lesson is narrower and more useful than "tune before you engineer":
+
+> Three failed feature ideas is not evidence that features are exhausted. It is evidence
+> about those three ideas. Read what the field already found before concluding a whole
+> category is dead — and before inventing a fourth idea of your own.
 
 ## What did not work (each measured, not assumed)
 
