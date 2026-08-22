@@ -173,8 +173,8 @@ RESIDENT_TOOLS: frozenset[str] = frozenset(
 def _normalize_tool_result(tool_name: str, result: Any) -> tuple[str, bool]:
     """Coerce whatever a handler returned into the ``(output, success)`` contract.
 
-    Most handlers return ``tuple[str, bool]``, but five — read_skill, critic,
-    experiment, sweep, research_loop — return a ``ToolResult`` dict instead. Python
+    Most handlers return ``tuple[str, bool]``, but six — read_skill, critic, experiment,
+    sweep, research_loop, model_serving — return a ``ToolResult`` dict instead. Python
     unpacks a 2-key dict into its *keys*, so ``out, ok = handler(...)`` silently yielded
     ``("formatted", "isError")``: the model received the literal string "formatted" as
     the tool's entire output, with a truthy "isError" as the success flag. That killed

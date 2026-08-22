@@ -121,11 +121,12 @@ async def test_calling_a_deferred_tool_directly_promotes_it(router):
         ("experiment", {"operation": "list"}),
         ("sweep", {"operation": "status"}),
         ("research_loop", {"operation": "status"}),
+        ("model_serving", {"operation": "plan_deployment"}),
     ],
 )
 @pytest.mark.asyncio
 async def test_dict_returning_handlers_still_yield_real_output(router, name, args):
-    """Regression: five handlers return a ToolResult dict, not (str, bool).
+    """Regression: six handlers return a ToolResult dict, not (str, bool).
 
     Python unpacks a 2-key dict into its keys, so `out, ok = handler(...)` yielded
     ("formatted", "isError") — the model got the literal string "formatted" as the
