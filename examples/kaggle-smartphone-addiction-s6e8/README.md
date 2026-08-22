@@ -56,6 +56,24 @@ agent never read its own playbook either. It was caught only because the agent, 
 tool that kept returning nine bytes, did the sensible thing and ran
 `echo "checking tool output format"` — behaviour no assertion was looking for.
 
+### How the agent debugged its own failed job
+
+Worth recording as a sequence, because the shape of it is the point:
+
+| Step | Job | Outcome | What it learned |
+|---|---|---|---|
+| 1 | full `s6e8_train.py`, 533 lines | FAILED (INTERNAL_ERROR, 3.8 min) | something in the pipeline breaks at scale |
+| 2 | `databricks_jobs logs` + `inspect` | — | run output gave no usable traceback |
+| 3 | `s6e8_import_test.py` | SUCCESS | every dependency is present, so it is not a missing package |
+| 4 | `s6e8_mlflow_probe.py` | — | isolated the fault to the MLflow path specifically |
+| 5 | `s6e8_train.py`, 20k rows / 100 trees | SUCCESS in 87s | the *whole* pipeline works — features, 3 models, stack, MLflow registration, submission write and verify |
+| 6 | `s6e8_train.py`, full 691k rows, real params | (submitted) | scale up only once the shape is proven |
+
+Shrink the problem until it passes, then scale. It never re-ran the same script unchanged
+after a failure, and it never guessed at a dependency it had not tested. The `script_path`
+feature added above is what made steps 3–6 possible at all: each probe is a small local
+file, not a script re-emitted through the model.
+
 ### What went right
 
 - **`compute_advice` was consulted before compute was chosen**, and returned CPU with a
