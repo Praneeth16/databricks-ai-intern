@@ -48,6 +48,14 @@ TASK
 
 CONSTRAINTS
 - Headless. CPU compute. Budget: 45 min wall clock.
+- WRITE THE TRAINING SCRIPT INCREMENTALLY. Do not compose the whole file inside one
+  reply — a long script will exhaust your output-token budget before you emit any tool
+  call, and then nothing runs. Build it in 3-4 chunks: `bash` with
+  `cat > /tmp/s6e8_train.py <<'PY' ... PY` for the first chunk, then append the rest
+  with `cat >> ... <<'PY'`. Verify with `python -c "import ast;ast.parse(open(...).read())"`,
+  then submit the job with `script_path="/tmp/s6e8_train.py"` — databricks_jobs reads the
+  file and stages it for you. Do NOT paste the script back into the `script` argument,
+  and never submit a placeholder.
 - Do NOT modify agent source code — workarounds go inside the job script.
 - Report OOF honestly. A number you did not measure is worse than no number.
 

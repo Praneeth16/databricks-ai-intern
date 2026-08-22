@@ -1,0 +1,98 @@
+# S6E8 attempt ledger.
+#
+# The standard for example folders in this repo: one parameterized `scripts/train.py`,
+# and every attempt is a row here rather than a new copy of the script. (The s6e5
+# example accumulated 26 near-duplicate scripts; this is the fix.)
+#
+# `oof_auc` / `lb_auc` are filled in after a run — they are results, not settings.
+# CV is fixed across every version so OOF arrays stay row-aligned and stackable:
+# StratifiedKFold(5, shuffle=True, random_state=42) on original row order.
+
+cv:
+  folds: 5
+  shuffle: true
+  seed: 42
+
+versions:
+  - id: v1_lgbm_raw
+    model: lgbm
+    features: [raw]
+    note: >
+      Published LGBM params on the 12 raw columns only. Establishes how much of the
+      gap is params vs features — my own first config scored 0.96324 with hand-picked
+      params, so this isolates the params half.
+    oof_auc: null
+    lb_auc: null
+
+  - id: v2_lgbm_te_freq
+    model: lgbm
+    features: [raw, te, freq]
+    note: >
+      Adds nested target encoding (smoothing=10) + transductive frequency encoding.
+      Reported as the single biggest feature win on this competition (+0.0023 CV).
+      All 12 columns are cast to string levels first, numerics included — bounded
+      low-cardinality values mean ~500 rows per level, so the smoothed means are
+      well estimated.
+    oof_auc: null
+    lb_auc: null
+
+  - id: v3_lgbm_full_fe
+    model: lgbm
+    features: [raw, te, freq, comp, lattice]
+    note: >
+      Adds composition/ratio features and the accounting residual
+      daily-(social+gaming+work), which I verified is >= 0 with ZERO violations
+      across 421k train and 182k test rows (the generator manufactured this
+      constraint; the original source data violates it 60.7% of the time).
+      Plus the decimal lattice (first fractional digit) that exposes generator
+      rounding.
+    oof_auc: null
+    lb_auc: null
+
+  - id: v4_xgb_full_fe
+    model: xgb
+    features: [raw, te, freq, comp, lattice]
+    note: Same feature set, different learner — for blend diversity.
+    oof_auc: null
+    lb_auc: null
+
+  - id: v5_cat_native
+    model: cat
+    features: [raw, comp, lattice]
+    note: >
+      CatBoost with native categorical handling and ordered target statistics.
+      Deliberately NOT given the hand-rolled target encoding: its per-row adaptive
+      shrinkage is reported to beat constant smoothing by +0.0004, so pre-encoding
+      would throw that away.
+    oof_auc: null
+    lb_auc: null
+
+  - id: v6_logit_stack
+    model: stack
+    members: [v2_lgbm_te_freq, v3_lgbm_full_fe, v4_xgb_full_fe, v5_cat_native]
+    note: >
+      Logit-space stack with a LogisticRegression meta-learner, fitted honestly
+      (each row scored by a meta-model that never saw its own fold). Logit space
+      beats raw-probability averaging by ~+0.0005 and rank-averaging by ~+0.0027
+      at this saturation level, because ranks lose resolution when members
+      correlate above 0.99.
+    oof_auc: null
+    lb_auc: null
+
+# Hypotheses deliberately NOT pursued, each with the reason. Recorded so the agent
+# (and the next person) does not spend compute re-deriving them.
+rejected:
+  - idea: NaN-indicator features
+    evidence: "measured -0.00001 here; missingness is MCAR"
+  - idea: Concatenating the original 7,500-row source dataset
+    evidence: "-0.0001; the original violates the accounting identity 60.7% of the time, the synthetic never does"
+  - idea: Pseudo-labelling confident test rows
+    evidence: "-0.0034, the worst single move reported on this competition; matches the s6e5 finding that pseudo-labelling is circular on a high-AUC model"
+  - idea: Monte-Carlo marginalisation over missing features
+    evidence: "measured 0.95240 vs 0.96328; sampling from marginals discards feature correlations"
+  - idea: Constrained mutual imputation of daily <-> weekend
+    evidence: "measured 0.96309 vs 0.96324; the synthetic only preserves the U(0.5,3) window for ~54% of comparable rows"
+  - idea: Neural members (TabM / ResNet / MLP-PLR)
+    evidence: "below the ~0.966 solo-OOF cliff, contribute <=0.00002 to a GBM stack already at 0.968+"
+  - idea: Blending other competitors' public submissions
+    evidence: "would lift LB past 0.9711 but is not our own modelling; same call as s6e5"

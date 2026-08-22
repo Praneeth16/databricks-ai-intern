@@ -1,0 +1,6 @@
+version,oof_auc,n_static_features
+v6_logit_stack,0.968503,
+v4_xgb_full_fe,0.968434,42
+v3_lgbm_full_fe,0.968243,42
+v2_lgbm_te_freq,0.967309,24
+v5_cat_native,0.961154,30
