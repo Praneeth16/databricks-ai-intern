@@ -39,7 +39,7 @@ Honest attribution, because it matters for reading the rest:
 
 ## What running the agent actually exposed
 
-This is the part worth reading. Pointing the agent at a real competition surfaced **five
+This is the part worth reading. Pointing the agent at a real competition surfaced **six
 defects that the 499-test unit suite passed straight over**, four of them pre-existing.
 
 | # | Defect | How it showed up | Status |
@@ -49,6 +49,7 @@ defects that the 499-test unit suite passed straight over**, four of them pre-ex
 | 3 | **No way to submit a locally-authored script** | Told to build the script incrementally (to dodge #2), the agent wrote it to `/tmp` in seven `bash` heredoc chunks, verified it parsed — then had no way to hand a local file to `databricks_jobs`. It submitted `script: "PLACEHOLDER"`, which staged cleanly, started a serverless job, and burned cluster time on a stub. | **Pre-existing gap.** Added `script_path`, plus a guard that refuses stub bodies. |
 | 4 | **`uc_inspect_dataset` dies without `DATABRICKS_WAREHOUSE_ID`** | `RuntimeError: DATABRICKS_WAREHOUSE_ID not set` on the agent's first two calls. It self-recovered — `tool_search` → `uc_volume` → read the CSVs directly — but burned two calls and a stack trace to get there. | Environment gap; set the var (see Reproducing). |
 | 5 | **Deferred tool loading gutted the research sub-agent** | My own change. `research_tool` filtered `get_tool_specs_for_llm()`, which no longer returns deferred tools, so the researcher silently dropped from 9 read-only tools to 2. | **Mine.** Fixed with `get_tool_specs_by_name`. |
+| 6 | **Nothing checks a training job's timeout against its own smoke test** | The agent smoke-tested at 87s, then submitted the full run with a 45-minute timeout. One fold takes 1738s, so five folds need ~2.4h. It had both numbers and never multiplied them; the schema's "Training jobs need >2h" hint was not enough. 45 min of serverless compute lost. | **Open** - see below. |
 
 Defect #1 is the one to sit with. The skills system never worked at the agent boundary:
 every `read_skill` call returned nine characters instead of a playbook. The s6e5 example's
@@ -67,12 +68,34 @@ Worth recording as a sequence, because the shape of it is the point:
 | 3 | `s6e8_import_test.py` | SUCCESS | every dependency is present, so it is not a missing package |
 | 4 | `s6e8_mlflow_probe.py` | — | isolated the fault to the MLflow path specifically |
 | 5 | `s6e8_train.py`, 20k rows / 100 trees | SUCCESS in 87s | the *whole* pipeline works — features, 3 models, stack, MLflow registration, submission write and verify |
-| 6 | `s6e8_train.py`, full 691k rows, real params | (submitted) | scale up only once the shape is proven |
+| 6 | `s6e8_train.py`, full 691k rows, real params | **TIMEDOUT at 45.4 min** | the pipeline was right; the timeout was 3x too short (see defect #6) |
 
 Shrink the problem until it passes, then scale. It never re-ran the same script unchanged
 after a failure, and it never guessed at a dependency it had not tested. The `script_path`
 feature added above is what made steps 3–6 possible at all: each probe is a small local
 file, not a script re-emitted through the model.
+
+Step 6 then died on the one thing the debugging sequence could not catch. The full run
+reached **fold 1 of 5** and was killed on its own 45-minute timeout at 45.4 min:
+
+```
+Fold 0 XGB auc=0.967604 (345.0s)    Fold 1 XGB auc=0.968298 (296.4s)
+Fold 0 LGB auc=0.967351 (163.0s)    Fold 1 LGB auc=0.968147 (163.8s)
+Fold 0 CB  auc=0.967334 (1222.1s)   <- 70% of the fold, and the reason it blew the budget
+=== Fold 0 done in 1738.3s ===      state: TIMEDOUT, "Run timed out"
+```
+
+The modelling was sound: fold AUCs of 0.9676-0.9683 against the 0.968434 the local
+pipeline reached, from a 58-feature set the agent designed itself (frequency + nested
+target encoding + composition, plus imputed columns kept alongside the originals). It also
+hit the MLflow experiment-path collision and re-rooted around it without help.
+
+What it got wrong was arithmetic it already had the inputs for. Its own smoke test took 87s
+on 20k rows at 100 trees; the full run was 34x the rows and 20x the trees. One fold at
+1738s means five folds is ~2.4 hours. The `timeout` field's description in the tool schema
+even says *"Training jobs need >2h"*. The agent read a number, did not extrapolate from its
+own measurement, and lost 45 minutes of serverless compute to a job that could never have
+finished.
 
 ### What went right
 
