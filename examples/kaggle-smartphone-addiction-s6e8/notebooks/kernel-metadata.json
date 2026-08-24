@@ -1,0 +1,17 @@
+{
+ "id": "paiky1995/lookup-transformer-and-the-control-that-refuted-me",
+ "title": "Lookup-Transformer and the Control That Refuted Me",
+ "code_file": "lookup-transformer.ipynb",
+ "language": "python",
+ "kernel_type": "notebook",
+ "is_private": "false",
+ "enable_gpu": "true",
+ "enable_tpu": "false",
+ "enable_internet": "false",
+ "dataset_sources": [],
+ "competition_sources": [
+  "playground-series-s6e8"
+ ],
+ "kernel_sources": [],
+ "machine_shape": "NvidiaTeslaT4"
+}
