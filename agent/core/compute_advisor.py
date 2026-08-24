@@ -201,6 +201,102 @@ def advise_from_script(
     return warnings
 
 
+def check_runtime_budget(
+    timeout_seconds: int | None,
+    estimate: dict | None,
+) -> tuple[list[str], str | None]:
+    """Check a job's timeout against what the submitter says the job will cost.
+
+    Returns ``(warnings, refusal)``. A refusal means do not submit: the run cannot finish
+    inside its own timeout, so submitting it buys nothing but spent compute.
+
+    This exists because of a specific, recorded failure. On the S6E8 competition the agent
+    smoke-tested a training script at 87s on 20k rows and 100 trees, then submitted the
+    full run — 34x the rows, 20x the trees — with a 45-minute timeout. It was killed at
+    45.4 minutes, in fold 1 of 5, having done nothing wrong except the multiplication. It
+    held both numbers and never multiplied them, and no code asked it to.
+
+    `estimate` is the caller's arithmetic, either measured-and-scaled
+    (``{"measured_seconds": 87, "scale_factor": 680}``) or asserted outright
+    (``{"estimated_seconds": 8700}``). Given one, this checks it. Given none, it can only
+    warn — which is why a short timeout on a training job is worth warning about at all.
+    """
+    warnings: list[str] = []
+    timeout = int(timeout_seconds or 0)
+
+    if not estimate:
+        if timeout and timeout < 2 * 3600:
+            warnings.append(
+                f"Timeout is {_dur(timeout)} and no runtime_estimate was given. Full "
+                "training runs at competition scale usually exceed 2h. If you have "
+                "smoke-tested this script, pass runtime_estimate={\"measured_seconds\": "
+                "<smoke wall clock>, \"scale_factor\": <rows ratio x trees ratio x folds>} "
+                "and this gets checked instead of guessed."
+            )
+        return warnings, None
+
+    measured = _as_float(estimate.get("measured_seconds"))
+    scale = _as_float(estimate.get("scale_factor"))
+    asserted = _as_float(estimate.get("estimated_seconds"))
+
+    if asserted is not None:
+        expected = asserted
+        basis = f"estimated_seconds={asserted:g}"
+    elif measured is not None:
+        expected = measured * (scale if scale is not None else 1.0)
+        basis = (
+            f"measured_seconds={measured:g} x scale_factor={scale:g}"
+            if scale is not None
+            else f"measured_seconds={measured:g} (no scale_factor, so scale 1x)"
+        )
+    else:
+        return warnings, (
+            "runtime_estimate needs either estimated_seconds, or measured_seconds "
+            "(optionally with scale_factor). Got: "
+            f"{sorted(estimate)}."
+        )
+
+    if expected <= 0:
+        return warnings, f"runtime_estimate resolves to {expected:g}s, which cannot be right ({basis})."
+
+    if not timeout:
+        warnings.append(
+            f"No timeout set, and this run is expected to take {_dur(expected)} ({basis}). "
+            "The workspace default may be shorter than that."
+        )
+        return warnings, None
+
+    # 1.25x, not 1.0x: fold times vary, and a run killed at 99% of the work is as useless
+    # as one killed at 10%.
+    needed = expected * 1.25
+    if timeout < needed:
+        return warnings, (
+            f"This run will not finish inside its timeout. Expected runtime {_dur(expected)} "
+            f"({basis}); timeout is {_dur(timeout)}. Raise timeout to at least "
+            f"{_dur(needed)} (1.25x expected, since fold times vary), or shrink the run. "
+            "A job killed at its timeout returns nothing."
+        )
+    return warnings, None
+
+
+def _as_float(v: object) -> float | None:
+    try:
+        return float(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _dur(seconds: float) -> str:
+    """Human duration. Hours carry their minutes: a "3.0h expected vs 3.0h timeout"
+    refusal reads like a contradiction, "3h 1m vs 3h" does not."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 7200:
+        return f"{seconds / 60:.0f}m"
+    h, m = divmod(int(round(seconds / 60)), 60)
+    return f"{h}h" if m == 0 else f"{h}h {m}m"
+
+
 COMPUTE_ADVICE_TOOL_SPEC: dict[str, object] = {
     "name": "compute_advice",
     "description": (

@@ -5,6 +5,7 @@ import pytest
 from agent.core.compute_advisor import (
     GPU_WORTH_IT_ROWS,
     advise_from_script,
+    check_runtime_budget,
     recommend_compute,
 )
 
@@ -156,3 +157,65 @@ def test_cpu_node_type_is_not_treated_as_gpu():
 def test_empty_script_is_not_second_guessed():
     assert advise_from_script(None, "serverless_gpu") == []
     assert advise_from_script("", "serverless_gpu") == []
+
+
+# ---- runtime budget -------------------------------------------------------------
+#
+# From the S6E8 run: the agent smoke-tested at 87s on 20k rows / 100 trees, then submitted
+# the full run at 34x rows and 20x trees with a 45-minute timeout. Killed at 45.4 min in
+# fold 1 of 5. It had both numbers and never multiplied them.
+
+
+def test_the_s6e8_timeout_is_refused_with_the_arithmetic_shown():
+    warnings, refusal = check_runtime_budget(45 * 60, {"measured_seconds": 87, "scale_factor": 680})
+    assert warnings == []
+    assert refusal is not None
+    assert "16h" in refusal and "45m" in refusal
+
+
+def test_a_timeout_that_covers_the_estimate_passes():
+    warnings, refusal = check_runtime_budget(21 * 3600, {"measured_seconds": 87, "scale_factor": 680})
+    assert refusal is None
+    assert warnings == []
+
+
+def test_the_headroom_factor_is_enforced_not_just_the_bare_estimate():
+    """A run that fits with 0% to spare is a run that dies in its last fold."""
+    _, refusal = check_runtime_budget(3600, {"estimated_seconds": 3400})
+    assert refusal is not None and "1.25x" in refusal
+
+
+def test_an_asserted_estimate_is_accepted_without_a_measurement():
+    _, refusal = check_runtime_budget(6 * 3600, {"estimated_seconds": 4 * 3600})
+    assert refusal is None
+
+
+def test_measured_seconds_alone_means_scale_one():
+    _, refusal = check_runtime_budget(600, {"measured_seconds": 87})
+    assert refusal is None
+
+
+def test_a_short_timeout_without_an_estimate_warns_but_does_not_block():
+    warnings, refusal = check_runtime_budget(45 * 60, None)
+    assert refusal is None
+    assert any("runtime_estimate" in w for w in warnings)
+
+
+def test_a_long_timeout_without_an_estimate_is_left_alone():
+    assert check_runtime_budget(6 * 3600, None) == ([], None)
+
+
+def test_no_timeout_with_an_estimate_warns_about_the_workspace_default():
+    warnings, refusal = check_runtime_budget(0, {"estimated_seconds": 4 * 3600})
+    assert refusal is None
+    assert any("No timeout set" in w for w in warnings)
+
+
+def test_an_unusable_estimate_is_refused_rather_than_ignored():
+    _, refusal = check_runtime_budget(3600, {"scale_factor": 10})
+    assert refusal is not None and "estimated_seconds" in refusal
+
+
+def test_a_nonsense_estimate_is_refused():
+    _, refusal = check_runtime_budget(3600, {"estimated_seconds": 0})
+    assert refusal is not None

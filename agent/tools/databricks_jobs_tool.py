@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Literal, Optional
 
 from agent.core import db_client
-from agent.core.compute_advisor import advise_from_script
+from agent.core.compute_advisor import advise_from_script, check_runtime_budget
 from agent.core.session import Event
 from agent.tools.types import ToolResult
 
@@ -416,6 +416,18 @@ class DatabricksJobsTool:
         for warning in compute_warnings:
             await self._log(f"Compute advisory: {warning}")
 
+        # Check the run against its own timeout before staging anything. A job that
+        # cannot finish inside its timeout returns nothing, so the cheapest place to
+        # find that out is here rather than 45 minutes in.
+        budget_warnings, refusal = check_runtime_budget(
+            _parse_timeout(args.get("timeout", "30m")),
+            args.get("runtime_estimate"),
+        )
+        if refusal:
+            return _err(refusal)
+        for warning in budget_warnings:
+            await self._log(f"Runtime budget: {warning}")
+
         workspace_path = await self._resolve_or_stage_script(
             args, as_notebook=(kind == "serverless_gpu"),
         )
@@ -447,11 +459,12 @@ class DatabricksJobsTool:
         await self._emit_state(life.lower(), run_id=run_id, url=url, result=result)
 
         log_text = await self._fetch_run_output(run)
+        all_warnings = list(compute_warnings) + list(budget_warnings)
         advisory = (
-            "\n**Compute advisory:**\n"
-            + "\n".join(f"- {w}" for w in compute_warnings)
+            "\n**Advisories:**\n"
+            + "\n".join(f"- {w}" for w in all_warnings)
             + "\n"
-            if compute_warnings
+            if all_warnings
             else ""
         )
         return _ok(
@@ -1200,6 +1213,16 @@ DATABRICKS_JOBS_TOOL_SPEC = {
             "timeout": {
                 "type": "string",
                 "description": "Max runtime (e.g. '30m', '4h', '12h'). Training jobs need >2h.",
+            },
+            "runtime_estimate": {
+                "type": "object",
+                "description": (
+                    "How long this run will take, so the timeout can be checked against it "
+                    "instead of guessed. Either {\"measured_seconds\": <wall clock of your "
+                    "smoke run>, \"scale_factor\": <rows ratio x trees ratio x folds>} or "
+                    "{\"estimated_seconds\": N}. The run is refused if timeout < 1.25x the "
+                    "result — a job killed at its timeout returns nothing."
+                ),
             },
             "env": {
                 "type": "object",
