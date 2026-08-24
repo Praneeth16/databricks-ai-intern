@@ -11,18 +11,54 @@ Second worked example for `databricks-ai-intern`, and the reference layout for
 
 | | |
 |---|---|
-| **Public LB** | **0.96982** |
-| Rank at that score | ~594 / 1700 teams |
+| **Public LB, own models only** | **0.97052** |
+| Public LB with the public OOF library blended in | 0.97104 |
+| Rank at 0.97052 | ~460 / 1700 teams |
+| First pass stopped at | 0.96982 (~594th) |
+| Strongest *own-models* pipeline published on this competition | 0.97041 |
 | Naive first attempt | 0.96324 — hand-picked params, raw features |
 | LB top | 0.97142 (best score reachable from *published* work: 0.97117) |
-| OOF → LB offset | **+0.00139** and **+0.00129** measured, against +0.00109–0.00150 predicted |
-| Compute | **CPU only** — ~10 min for a 5-fold XGBoost over 691k rows |
-| Submissions used | 2 of 10/day |
+| OOF → LB offset | measured five times and shrinking as models strengthen: **+0.00139**, +0.00127, +0.00112, +0.00107, +0.00107 |
+| Compute | GBMs on CPU, neural members on Databricks serverless GPU (A10). The lookup transformer takes 18 min there against 4 h on local MPS. |
+| Submissions used | 8 across two days |
 
 Full numbers, the killed hypotheses, and the honest-ceiling argument are in
 [`FINAL_RESULTS.md`](FINAL_RESULTS.md).
 
+**The second pass in one paragraph.** The first pass's four-GBM stack gained +0.00007 and its
+conclusion — that the members were too correlated — was right. What it got wrong was the
+remedy: it reached for a different *architecture*. TabM, a batch-ensembled MLP, fed the same
+target-encoded features, measured Spearman **0.9945** against the GBMs and earned 5% blend
+weight. A lookup transformer over each column's *exact quantised values* measured **0.9635**
+and earned **50%**, so we concluded that decorrelation is a property of the input
+representation. A later controlled experiment refuted that mechanism: see
+[`notebooks/README.md`](notebooks/README.md). A strength-matched MLP fed these same
+target-encoded features measures 0.9665 against the trees, not 0.9945, so the decorrelation
+boundary is tree-versus-neural and the lookup's real contribution is that it reaches GBDT
+strength while sitting outside the tree family. The 0.9945 TabM figure remains unexplained.
+
+Giving CatBoost the features the first pass had deliberately withheld was worth
+**+0.0071** on that member. A 30-trial Optuna sweep was worth nothing at all (0.966850 against
+the incumbent's 0.966853), because the incumbent params were already published ones.
+
 ![Leaderboard position](artifacts/leaderboard-position.png)
+
+## Attribution
+
+Two of the model families here are ports of other people's published work, and the second
+leaderboard variant consumes other people's predictions outright. Recording that precisely,
+because the distinction between the two variants is the whole point of the result:
+
+| what | whose | how it is used |
+|---|---|---|
+| Lookup-Transformer architecture | [tamerlanomralinov](https://www.kaggle.com/code/tamerlanomralinov/s6e8-lookup-transformer-insights-lb-0-97041) (LB 0.97041) | architecture ported, retrained from scratch on our folds — `v13`/`v14`/`v15`/`v16`/`v19` |
+| RealMLP-TD implementation | [zhenruiweng](https://www.kaggle.com/code/zhenruiweng/s6e8-public-lb-0-97009-single-model-realmlp) (LB 0.97009) | architecture ported, retrained on our folds — `v17` |
+| Target-encoding + frequency-encoding recipe | published notebooks on this competition | first pass, `v2` onward |
+| 74-model OOF library | [szymonkapiski](https://www.kaggle.com/datasets/szymonkapiski/s6e8-oof-library-47-models), which itself includes models by najiama and omidbaghchehsaraei | **predictions** consumed directly — variant B only |
+| `19_blend` OOF and submission | [najiama](https://www.kaggle.com/datasets/najiama/predicting-smartphone-addiction-oof-submission-csv) | **predictions** consumed directly — variant B2 only |
+
+Variant A (0.97052) contains no other competitor's predictions. Variant B (0.97084) and B2
+(0.97104) do, and neither is the submission this example stands behind.
 
 ## How this example was produced
 
