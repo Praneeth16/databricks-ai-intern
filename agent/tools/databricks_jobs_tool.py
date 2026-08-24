@@ -26,9 +26,11 @@ import os
 import re
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Literal, Optional
 
 from agent.core import db_client
+from agent.core.compute_advisor import advise_from_script, check_runtime_budget
 from agent.core.session import Event
 from agent.tools.types import ToolResult
 
@@ -136,6 +138,56 @@ def _filter_agent_env(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
             continue
         out[k] = v
     return out
+
+
+# A script whose entire body is a stub marker. Anchored and whole-body on purpose: a
+# real script may well contain the word "placeholder" in a comment or a string.
+# `\b` cannot follow `...` (a dot is not a word character), so ellipsis-only bodies get
+# their own alternative rather than being folded into the keyword list.
+_PLACEHOLDER_RE = re.compile(
+    r"^(?:(?:#\s*)?(?:placeholder|todo|tbd|fixme|pass)\b[\s.…]*|[.…]{2,})$",
+    re.IGNORECASE,
+)
+
+
+def _load_script_text(args: Dict[str, Any]) -> Optional[str]:
+    """Resolve the job's Python source from ``script`` or ``script_path``.
+
+    ``script_path`` exists because the only other way to submit a long script is to
+    re-emit the whole file as an inline tool argument, which exhausts the model's output
+    budget. The observed failure was not a clean error either: the agent authored a real
+    script to local disk, could not hand it over, and submitted
+    ``script: "PLACEHOLDER"`` — which staged and ran, wasting cluster time. Authoring in
+    chunks to a file and passing the path costs a handful of tokens.
+
+    Also rejects stub scripts up front, before a workspace write and a cluster start.
+    """
+    script = args.get("script")
+    script_path = args.get("script_path")
+
+    if script_path and not script:
+        local = Path(script_path).expanduser()
+        if not local.is_file():
+            raise ValueError(f"script_path {script_path!r} is not a readable file.")
+        script = local.read_text(encoding="utf-8")
+        args.setdefault("filename", local.name)
+
+    if script is None:
+        return None
+
+    stripped = script.strip()
+    if not stripped:
+        raise ValueError("Script is empty.")
+    # Match the stub text itself rather than gating on length: `print('hi')` is a
+    # perfectly legitimate short job, so a character minimum rejects real scripts while
+    # still missing a long, elaborate stub.
+    if _PLACEHOLDER_RE.match(stripped):
+        raise ValueError(
+            "Refusing to submit a placeholder script. Write the real script to a local "
+            "file and pass `script_path` (author it in chunks with bash if it is long), "
+            "or pass the full source as `script`."
+        )
+    return script
 
 
 def _parse_timeout(s: Optional[str]) -> int:
@@ -353,6 +405,29 @@ class DatabricksJobsTool:
                 "Use script | serverless | serverless_gpu | finetune."
             )
 
+        # Advisory only: flag compute that contradicts what the script does, before we
+        # spend job-minutes finding out. The s6e5 run lost a job to LightGBM-on-GPU.
+        compute_warnings = advise_from_script(
+            _load_script_text(args),
+            kind,
+            args.get("hardware_flavor"),
+            args.get("node_type_id"),
+        )
+        for warning in compute_warnings:
+            await self._log(f"Compute advisory: {warning}")
+
+        # Check the run against its own timeout before staging anything. A job that
+        # cannot finish inside its timeout returns nothing, so the cheapest place to
+        # find that out is here rather than 45 minutes in.
+        budget_warnings, refusal = check_runtime_budget(
+            _parse_timeout(args.get("timeout", "30m")),
+            args.get("runtime_estimate"),
+        )
+        if refusal:
+            return _err(refusal)
+        for warning in budget_warnings:
+            await self._log(f"Runtime budget: {warning}")
+
         workspace_path = await self._resolve_or_stage_script(
             args, as_notebook=(kind == "serverless_gpu"),
         )
@@ -384,6 +459,14 @@ class DatabricksJobsTool:
         await self._emit_state(life.lower(), run_id=run_id, url=url, result=result)
 
         log_text = await self._fetch_run_output(run)
+        all_warnings = list(compute_warnings) + list(budget_warnings)
+        advisory = (
+            "\n**Advisories:**\n"
+            + "\n".join(f"- {w}" for w in all_warnings)
+            + "\n"
+            if all_warnings
+            else ""
+        )
         return _ok(
             f"""**Databricks Job ({kind})**
 
@@ -392,7 +475,7 @@ class DatabricksJobsTool:
 **Result:** {result or "—"}
 **Message:** {msg or "—"}
 **View:** {url}
-
+{advisory}
 **Output:**
 ```
 {log_text}
@@ -508,9 +591,10 @@ class DatabricksJobsTool:
         """
         if args.get("workspace_path"):
             return args["workspace_path"]
-        script = args.get("script")
+
+        script = _load_script_text(args)
         if not script:
-            raise ValueError("Provide either `workspace_path` or `script`.")
+            raise ValueError("Provide one of `workspace_path`, `script`, or `script_path`.")
 
         filename = args.get("filename") or "train.py"
         if not re.match(r"^[\w.-]+\.py$", filename):
@@ -1066,6 +1150,17 @@ DATABRICKS_JOBS_TOOL_SPEC = {
                     "/Workspace/Users/<user>/databricks-ai-intern/<session>/<filename>. Mutually exclusive with workspace_path."
                 ),
             },
+            "script_path": {
+                "type": "string",
+                "description": (
+                    "Path to a script on the LOCAL filesystem (e.g. /tmp/train.py). Its "
+                    "contents are read and staged for you. PREFER THIS for anything longer "
+                    "than a few dozen lines: author the file in chunks with bash "
+                    "(cat > file <<'PY' ... then cat >> file <<'PY'), then pass the path. "
+                    "Passing a long script inline as `script` can exhaust your output token "
+                    "budget mid-call, in which case nothing runs."
+                ),
+            },
             "workspace_path": {
                 "type": "string",
                 "description": "Existing Workspace Files path (e.g. /Workspace/Users/me/script.py). Mutually exclusive with script.",
@@ -1118,6 +1213,16 @@ DATABRICKS_JOBS_TOOL_SPEC = {
             "timeout": {
                 "type": "string",
                 "description": "Max runtime (e.g. '30m', '4h', '12h'). Training jobs need >2h.",
+            },
+            "runtime_estimate": {
+                "type": "object",
+                "description": (
+                    "How long this run will take, so the timeout can be checked against it "
+                    "instead of guessed. Either {\"measured_seconds\": <wall clock of your "
+                    "smoke run>, \"scale_factor\": <rows ratio x trees ratio x folds>} or "
+                    "{\"estimated_seconds\": N}. The run is refused if timeout < 1.25x the "
+                    "result — a job killed at its timeout returns nothing."
+                ),
             },
             "env": {
                 "type": "object",

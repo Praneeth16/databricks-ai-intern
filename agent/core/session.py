@@ -111,8 +111,11 @@ class Session:
         )
         self.event_queue = event_queue
         self.session_id = str(uuid.uuid4())
+        # Databricks FMAPI, not Bedrock: CLAUDE.md makes this repo Databricks-native, and
+        # a Bedrock fallback here silently routed off-platform (and to an older model) on
+        # any path that constructed a Session without a Config.
         self.config = config or Config(
-            model_name="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            model_name="databricks/databricks-claude-sonnet-5",
         )
         self.is_running = True
         self._cancelled = asyncio.Event()

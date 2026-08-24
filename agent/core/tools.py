@@ -3,6 +3,7 @@ Tool system for the agent
 Provides ToolSpec and ToolRouter for managing both built-in and MCP tools
 """
 
+import json
 import logging
 import warnings
 from dataclasses import dataclass
@@ -42,6 +43,16 @@ from agent.tools.papers_tool import HF_PAPERS_TOOL_SPEC, hf_papers_handler
 from agent.tools.read_skill_tool import READ_SKILL_TOOL_SPEC, read_skill_handler
 from agent.tools.experiment_tool import EXPERIMENT_TOOL_SPEC, experiment_handler
 from agent.tools.sweep_tool import SWEEP_TOOL_SPEC, sweep_handler
+from agent.core.compute_advisor import (
+    COMPUTE_ADVICE_TOOL_SPEC,
+    compute_advice_handler,
+)
+from agent.tools.tool_search import (
+    TOOL_SEARCH_TOOL_SPEC,
+    build_catalog,
+    tool_search_handler,
+)
+from agent.tools.truncation import MODEL_FACING_CHAR_CAP, truncate_output
 from agent.tools.critic_tool import CRITIC_TOOL_SPEC, critic_handler
 from agent.tools.research_loop_tool import RESEARCH_LOOP_TOOL_SPEC, research_loop_handler
 from agent.tools.model_serving_tool import MODEL_SERVING_TOOL_SPEC, model_serving_handler
@@ -124,6 +135,118 @@ class ToolSpec:
     description: str
     parameters: dict[str, Any]
     handler: Optional[Callable[[dict[str, Any]], Awaitable[tuple[str, bool]]]] = None
+    # When True the schema is withheld from the LLM request until `tool_search`
+    # fetches it. The tool stays callable either way — see RESIDENT_TOOLS.
+    defer_loading: bool = False
+
+
+# Tools whose schemas are always sent. Everything else is deferred behind
+# `tool_search`, because sending all 25 builtin schemas costs ~52 KB (~13k tokens) on
+# every request while a typical turn touches only a few.
+#
+# The bar for being resident: needed in the first few turns of almost any task, or
+# needed to recover when something goes wrong. Discovery/research and
+# specialised-subsystem tools do not clear it.
+RESIDENT_TOOLS: frozenset[str] = frozenset(
+    {
+        # Filesystem / execution — the core loop.
+        "bash",
+        "read",
+        "write",
+        "edit",
+        "sandbox_create",
+        # Task structure.
+        "plan_tool",
+        # Databricks essentials: reaching data and submitting work.
+        "uc_volume",
+        "databricks_jobs",
+        # Domain playbooks; cheap and steers everything after it.
+        "read_skill",
+        # Tiny schema, and must be consulted BEFORE the first job submission.
+        "compute_advice",
+        # Always resident by construction.
+        "tool_search",
+    }
+)
+
+
+def _normalize_tool_result(tool_name: str, result: Any) -> tuple[str, bool]:
+    """Coerce whatever a handler returned into the ``(output, success)`` contract.
+
+    Most handlers return ``tuple[str, bool]``, but six — read_skill, critic, experiment,
+    sweep, research_loop, model_serving — return a ``ToolResult`` dict instead. Python
+    unpacks a 2-key dict into its *keys*, so ``out, ok = handler(...)`` silently yielded
+    ``("formatted", "isError")``: the model received the literal string "formatted" as
+    the tool's entire output, with a truthy "isError" as the success flag. That killed
+    the skills system, the critic, the experiment ledger, and sweeps at the agent
+    boundary while looking like success in the logs.
+
+    Normalising here rather than in each tool fixes all five at once and stops a future
+    handler from reintroducing it, since the dict shape is a reasonable thing to write.
+    """
+    if isinstance(result, tuple) and len(result) == 2:
+        output, ok = result
+        return output if isinstance(output, str) else str(output), bool(ok)
+
+    if isinstance(result, dict):
+        output = result.get("formatted")
+        if output is None:
+            output = json.dumps(result, default=str)
+        logger.debug("Normalized dict result from %s into the (output, ok) contract", tool_name)
+        return str(output), not bool(result.get("isError", False))
+
+    logger.warning(
+        "Tool %s returned %s, expected tuple[str, bool] or a ToolResult dict",
+        tool_name, type(result).__name__,
+    )
+    return str(result), True
+
+
+def sanitize_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Drop `$defs`/`definitions` entries that nothing `$ref`s.
+
+    Mirrors the definition-pruning stage of codex's schema pipeline
+    (`codex-rs/tools/src/json_schema.rs`). MCP servers in particular ship whole shared
+    definition blocks per tool, and unreferenced ones are pure token cost.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    def refs(node: Any) -> set[str]:
+        found: set[str] = set()
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str):
+                found.add(ref.rsplit("/", 1)[-1])
+            for key, value in node.items():
+                if key not in ("$defs", "definitions"):
+                    found |= refs(value)
+        elif isinstance(node, list):
+            for item in node:
+                found |= refs(item)
+        return found
+
+    out = dict(schema)
+    for bucket in ("$defs", "definitions"):
+        defs = out.get(bucket)
+        if not isinstance(defs, dict):
+            continue
+        # Iterate to a fixed point: a kept definition may reference another.
+        keep = refs({k: v for k, v in out.items() if k != bucket})
+        while True:
+            grown = set(keep)
+            for name in keep:
+                if name in defs:
+                    grown |= refs(defs[name])
+            if grown == keep:
+                break
+            keep = grown
+        pruned = {k: v for k, v in defs.items() if k in keep}
+        if pruned:
+            out[bucket] = pruned
+        else:
+            out.pop(bucket)
+    return out
 
 
 class ToolRouter:
@@ -135,9 +258,13 @@ class ToolRouter:
     def __init__(self, mcp_servers: dict[str, MCPServerConfig], hf_token: str | None = None, local_mode: bool = False):
         self.tools: dict[str, ToolSpec] = {}
         self.mcp_servers: dict[str, dict[str, Any]] = {}
+        # Names whose schemas go on the wire. Deferred tools join this as
+        # `tool_search` fetches them, or on first direct call.
+        self.active_tools: set[str] = set()
 
         for tool in create_builtin_tools(local_mode=local_mode):
             self.register_tool(tool)
+        self._install_tool_search()
 
         self.mcp_client: Client | None = None
         if mcp_servers:
@@ -151,7 +278,67 @@ class ToolRouter:
         self._mcp_initialized = False
 
     def register_tool(self, tool: ToolSpec) -> None:
+        tool.parameters = sanitize_schema(tool.parameters)
         self.tools[tool.name] = tool
+        if not tool.defer_loading:
+            self.active_tools.add(tool.name)
+
+    def _install_tool_search(self) -> None:
+        """Register `tool_search`, with the deferred-tool catalog in its description.
+
+        The catalog is what makes deferral safe: the model still sees every deferred
+        tool's name and one-line summary, so it can tell what exists and ask for it.
+        Without it, deferral would just hide capability.
+        """
+        deferred = self.deferred_tools()
+        if not deferred:
+            return
+        self.register_tool(
+            ToolSpec(
+                name=TOOL_SEARCH_TOOL_SPEC["name"],
+                description=TOOL_SEARCH_TOOL_SPEC["description"] + build_catalog(deferred),
+                parameters=TOOL_SEARCH_TOOL_SPEC["parameters"],
+                handler=tool_search_handler,
+            )
+        )
+
+    def get_tool_specs_by_name(self, names: set[str]) -> list[dict[str, Any]]:
+        """Specs for named tools, ignoring whether they're advertised to the main loop.
+
+        Deferral exists to keep the *main* loop's per-request schema budget down. A
+        sub-agent that is handed an explicit, curated tool list (see
+        ``research_tool.RESEARCH_TOOL_NAMES``) has its own context and should get every
+        tool on that list — filtering it through the advertised set would silently strip
+        it down to whatever the main loop happened to have loaded.
+        """
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                },
+            }
+            for name, tool in self.tools.items()
+            if name in names
+        ]
+
+    def deferred_tools(self) -> dict[str, str]:
+        """Registered-but-not-advertised tools, as {name: description}."""
+        return {
+            name: spec.description
+            for name, spec in self.tools.items()
+            if name not in self.active_tools
+        }
+
+    def promote(self, names: list[str]) -> list[str]:
+        """Move deferred tools into the advertised set. Returns those actually promoted."""
+        promoted = [n for n in names if n in self.tools and n not in self.active_tools]
+        self.active_tools.update(promoted)
+        if promoted:
+            logger.info("Promoted deferred tools: %s", ", ".join(promoted))
+        return promoted
 
     async def register_mcp_tools(self) -> None:
         tools = await self.mcp_client.list_tools()
@@ -196,9 +383,11 @@ class ToolRouter:
             logger.warning("Failed to load OpenAPI search tool: %s", e)
 
     def get_tool_specs_for_llm(self) -> list[dict[str, Any]]:
-        """Get tool specifications in OpenAI format"""
+        """Tool specifications in OpenAI format, limited to the advertised set."""
         specs = []
         for tool in self.tools.values():
+            if tool.name not in self.active_tools:
+                continue
             specs.append(
                 {
                     "type": "function",
@@ -241,12 +430,43 @@ class ToolRouter:
         session: Any = None,
         tool_call_id: str | None = None,
     ) -> tuple[str, bool]:
+        """Call a tool, then apply the global output cap before the result enters history.
+
+        The cap is a backstop, not the primary limit: tools that already trim themselves
+        (bash/read at 25k, research at 8k) stay under it untouched. What it catches is
+        everything that never set a limit — MCP tools especially, whose output volume we
+        do not control.
+        """
+        output, ok = _normalize_tool_result(
+            tool_name, await self._dispatch_tool(tool_name, arguments, session, tool_call_id)
+        )
+        if isinstance(output, str) and len(output) > MODEL_FACING_CHAR_CAP:
+            original = len(output)
+            output = truncate_output(output, prefix=f"{tool_name}_output_")
+            logger.info(
+                "Capped %s output for the model: %d -> %d chars",
+                tool_name, original, len(output),
+            )
+        return output, ok
+
+    async def _dispatch_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        session: Any = None,
+        tool_call_id: str | None = None,
+    ) -> tuple[str, bool]:
         """
         Call a tool and return (output_string, success_bool).
 
         For MCP tools, converts the CallToolResult content blocks to a string.
         For built-in tools, calls their handler directly.
         """
+        # A deferred tool called directly still runs — deferral withholds the schema,
+        # never the capability. Promote it so the next request carries its schema.
+        if tool_name in self.tools and tool_name not in self.active_tools:
+            self.promote([tool_name])
+
         # Check if this is a built-in tool with a handler
         tool = self.tools.get(tool_name)
         if tool and tool.handler:
@@ -326,6 +546,13 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
             description=READ_SKILL_TOOL_SPEC["description"],
             parameters=READ_SKILL_TOOL_SPEC["parameters"],
             handler=read_skill_handler,
+        ),
+        # Which compute a training job belongs on (CPU vs GPU) — advice only.
+        ToolSpec(
+            name=COMPUTE_ADVICE_TOOL_SPEC["name"],
+            description=COMPUTE_ADVICE_TOOL_SPEC["description"],
+            parameters=COMPUTE_ADVICE_TOOL_SPEC["parameters"],
+            handler=compute_advice_handler,
         ),
         # Planning and job management tools
         ToolSpec(
@@ -432,7 +659,17 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
     else:
         tools = get_sandbox_tools() + tools
 
-    tool_names = ", ".join([t.name for t in tools])
-    logger.info(f"Loaded {len(tools)} built-in tools: {tool_names}")
+    # Defer everything outside the resident set. MCP tools are left resident on
+    # purpose: the operator configured them explicitly, so hiding them would be
+    # surprising, and there are usually few of them.
+    for tool in tools:
+        tool.defer_loading = tool.name not in RESIDENT_TOOLS
+
+    resident = [t.name for t in tools if not t.defer_loading]
+    deferred = [t.name for t in tools if t.defer_loading]
+    logger.info(
+        "Loaded %d built-in tools: %d resident (%s), %d deferred behind tool_search (%s)",
+        len(tools), len(resident), ", ".join(resident), len(deferred), ", ".join(deferred),
+    )
 
     return tools

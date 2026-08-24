@@ -32,12 +32,27 @@ logger = logging.getLogger(__name__)
 # ── Pricing catalogs ────────────────────────────────────────────────────
 
 
-# FMAPI per-million-token rates. Per the Databricks AI Gateway listed
-# rates as of 2026-05; refresh when the gateway publishes new prices.
-# Keys are the served-model name segment after ``databricks/`` so the
-# resolver can take ``databricks/databricks-claude-opus-4-7`` and look
-# up ``databricks-claude-opus-4-7`` directly.
+# FMAPI per-million-token rates, refreshed 2026-08-23 against the endpoints actually
+# served in the target workspace. Keys are the served-model name segment after
+# ``databricks/`` so the resolver can take ``databricks/databricks-claude-opus-4-7``
+# and look up ``databricks-claude-opus-4-7`` directly.
+#
+# A catalog miss is fail-safe by design: ``estimate_llm_cost`` returns
+# ``estimated_cost_usd=None`` with a block reason rather than 0.0, so an unpriced model
+# is reported as unknown, never as free. The cost of a miss is a hole in telemetry and
+# MLflow trace cost backfill (the only two consumers), not a bypassed budget gate.
+#
+# The Claude 5 rows marked TIER-INHERITED carry their predecessor tier's rate because
+# the gateway had not published per-model prices for them at time of writing. They exist
+# so Claude 5 usage is costed at all rather than dropping out of telemetry; replace with
+# published figures when available.
+#
+# Known remaining gap: ``databricks-claude-haiku-4-5`` is offered by the model picker but
+# has no row here, so Haiku usage reports unknown cost. Left unpriced rather than guessed.
 FMAPI_PRICE_USD_PER_MTOK: dict[str, dict[str, float]] = {
+    # Claude 5 family — TIER-INHERITED from the matching Claude 4.x tier.
+    "databricks-claude-opus-5":            {"input": 15.0, "output": 75.0},
+    "databricks-claude-sonnet-5":          {"input":  3.0, "output": 15.0},
     "databricks-claude-opus-4-8":          {"input": 15.0, "output": 75.0},
     "databricks-claude-opus-4-7":          {"input": 15.0, "output": 75.0},
     "databricks-claude-opus-4-6":          {"input": 15.0, "output": 75.0},

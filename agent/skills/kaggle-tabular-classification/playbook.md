@@ -4,8 +4,31 @@ Evidence-first playbook for Kaggle tabular AUC/log-loss/accuracy competitions.
 The structure is fixed (7 phases). The *moves* inside each phase are
 **hypotheses, not laws** — every one cites prior evidence (which way it cut and
 by how much) and a decision threshold. Run the ablation on THIS data; keep the
-move only if it clears the threshold. The lessons below come from one comp
-(Playground S6E5, F1 Pit Stops); they are strong priors, not guarantees.
+move only if it clears the threshold. The lessons below come from two comps —
+Playground **S6E5** (F1 Pit Stops, temporal) and Playground **S6E8** (Smartphone
+Addiction, IID with heavy missingness) — and they are strong priors, not guarantees.
+
+**The two comps disagree, which is the point.** S6E5's single hardest-won lesson was
+"a temporal holdout is the only valid proxy". S6E8 has no temporal column at all, and
+there StratifiedKFold is correct. Where the two disagree, the disagreement itself is
+the lesson: verify the geometry on *this* data rather than inheriting a rule.
+
+## Phase -1 — Pick CPU or GPU before submitting anything (cheap, always do it)
+
+Call `compute_advisor.recommend_compute(task_shape=..., model_family=..., n_rows=...,
+n_features=...)` and state the answer. For tabular gradient boosting at Playground
+scale the answer is **CPU**, and reaching for GPU is an active mistake:
+
+- Below roughly 10M rows, multicore CPU `hist` beats GPU — kernel launch and
+  host-to-device transfer cost more than the histogram work saved. S6E8 is 691k x 12.
+- **LightGBM cannot use GPU on the Databricks serverless GPU image at all**: its GPU
+  build needs OpenCL, which that image does not ship. S6E5 lost a whole job to this.
+  XGBoost is fine there — it uses CUDA directly via `device="cuda"`.
+- CPU is also far cheaper per DBU, and on S6E8 a 5-fold XGBoost over 691k rows took
+  ~10 minutes on plain CPU.
+
+Reach for GPU when the model does gradient descent on dense tensors (transformer,
+CNN, MLP/TabM, any fine-tune) — not because the row count is "big".
 
 ## How to use the loop tools (read first)
 
@@ -68,6 +91,19 @@ same direction as LB?
   grouped KFold (v7) gave OOF 0.929 but LB regressed by 0.0026; StratGroupKFold
   by RaceYear (v13) gave OOF 0.925 and LB regressed 0.003. On *this* shift-heavy
   data, grouped KFold's OOF lied.
+- **If NO temporal or group column exists, use `StratifiedKFold(5, shuffle=True,
+  random_state=42)`** and stop looking for a cleverer split. Evidence (S6E8): 12
+  independent features, no time column, and an id carrying no signal (measured
+  corr(id, label) = 0.0011, flat across deciles). That split gave a stable, *positive*
+  CV→LB offset of +0.00109 to +0.00150 across submissions — my own v4 measured
+  OOF 0.968434 → LB 0.96982, an offset of +0.00139. Note the sign: unlike S6E5's
+  val→LB gap, here LB reads slightly *higher* than OOF, because test predictions
+  average five fold-models while OOF rows come from one.
+- **Use the same seed and split as the community if you plan to blend.** OOF arrays are
+  only stackable if they share fold assignments on original row order.
+- **Single-holdout noise floor.** On S6E8 a single 20% holdout had a ~±0.0003 noise
+  floor — enough to make three separate feature ideas look like small wins when they
+  were nothing. Anything below ~0.0005 needs full k-fold OOF to resolve.
 - **Decision rule:** submit one model under each candidate scheme; keep the
   scheme whose OOF/val ranks the two submissions in the same order as LB. Do
   NOT inherit "time-holdout always wins" — on IID data grouped KFold is usually
@@ -77,6 +113,42 @@ same direction as LB?
 
 Record the chosen scheme and its gap via `experiment record` — every later
 phase is judged against it.
+
+## Phase 1b — Target + frequency encoding (highest-lift feature move on IID comps)
+
+**Hypothesis:** on a synthetic Playground table where the generator memorised
+value→label, encoding each column's *levels* is worth more than any derived ratio.
+
+Evidence (S6E8): target + frequency encoding was **+0.00324 OOF measured here**
+(0.964070 raw -> 0.967309), against +0.0023 reported by published work — the single
+biggest feature win on that competition, and ~3.5x the entire composition/lattice block
+that followed it (+0.00093).
+
+**It also dwarfed hyperparameters, which is the opposite of what I first concluded.**
+Tuning the raw-feature model was worth roughly +0.0008; features were worth ~+0.0042. I
+had decided features were exhausted after three of my *own* feature ideas measured as
+noise. Three failed ideas is evidence about those three ideas — read what the field
+already found before writing off a whole category.
+
+- Cast **all** columns to string levels, **numerics included**. Bounded low-cardinality
+  numerics (age had 18 distinct values, notifications 231) leave ~500 rows per level,
+  which is plenty for a well-estimated smoothed mean.
+- Target-encode with smoothing ≈ 10: `(sum_y + prior*10) / (count + 10)`. Smoothing 50
+  and 200 both measured worse (−0.00006 / −0.00030).
+- **Nest the encoding inside the folds.** Each outer fold's training rows must be encoded
+  out-of-fold via an inner split, or the model learns a feature that partly *is* the
+  label and OOF flatters badly.
+- Frequency-encode transductively (counts over train+test). It uses no labels, so it is
+  not leakage.
+- `pandas >= 3.0` trap: `.astype(str)` preserves NA instead of creating a `"nan"` level,
+  which silently drops those rows from every subsequent group-by. Use
+  `.astype(object).where(notna(), "__missing__").astype(str)`.
+
+**Missing values: augment, never replace.** GBMs learn native NaN split directions;
+imputing drags rows toward the mean and loses information. Keep imputed columns
+*alongside* the originals (+0.0012 on S6E8). And test whether missingness carries signal
+before building features from it — on S6E8 it did not (NaN-indicator features measured
+−0.00001, MCAR), which I confirmed independently.
 
 ## Phase 2 — Cross-entity / Race-context features (often highest lift)
 
@@ -211,6 +283,35 @@ References: [Deotte pseudo-labeling QDA 0.969](https://www.kaggle.com/code/cdeot
 - **NN-only solutions** — GBDTs dominate categorical-heavy tabular. On S6E5 the
   MLP got weight ≈ 0 in every blend. Use NN only as a diversity ingredient, and
   only if it's comparably strong.
+
+## Already-falsified hypotheses — do not spend compute re-deriving these
+
+Both comps are synthetic Playground tables. These were each measured, and each lost.
+If you think one applies anyway, say why *this* data differs before running it.
+
+| Idea | Measured result | Why it failed |
+|---|---|---|
+| NaN-indicator features | S6E8 −0.00001 | Missingness was MCAR; the pattern carries no signal |
+| Concatenating the original source dataset | S6E8 −0.0001 | Generator manufactured structure the original lacks: the accounting identity `daily ≥ social+gaming+work` holds for **all** 421k synthetic rows and is violated by 60.7% of original rows |
+| Pseudo-labelling confident test rows | S6E8 −0.0034 (worst single move); S6E5 −0.00027 | Circular on a high-AUC model — it learns to predict its own predictions, so val rises while LB falls |
+| Monte-Carlo marginalising over missing features | S6E8 0.95240 vs 0.96328 | Sampling from *marginals* discards feature correlations and injects noise |
+| Constrained mutual imputation between correlated columns | S6E8 0.96309 vs 0.96324 | The generator only partly preserved the constraint (~54% of comparable rows) |
+| Neural members (TabM / ResNet / MLP-PLR) | ≤ +0.00002 to a GBM stack | Below a ~0.966 solo-OOF cliff, contribution tracks solo strength, not decorrelation |
+| Rank-averaging a saturated ensemble | S6E8 −0.0027 vs logit stack | Ranks lose resolution when members correlate above 0.99 |
+| Richer feature sets on shift-heavy synthetic data | S6E5 −0.0041 (26 feats), −0.0029 (35 feats) | Over-engineering adds noise when the generator's signal is already exposed |
+
+**Blending strategy that did work (S6E8):** logit-space stack
+(`logit(p)` clipped to ±30) with a LogisticRegression meta-learner, fitted honestly so
+no row is scored by a combiner that saw its own OOF value — **+0.00187** over the best
+single model, and +0.00047 over raw-probability averaging. Keep predictions in float64;
+float32 rounding reordered 28% of test ranks at blend level.
+
+**Know when the leaderboard stops being evidence.** On S6E8, the top of the public LB
+(0.97142) sits above the best score reachable from published work (0.97117) — the gap is
+people blending each other's submissions. A widely-upvoted analysis showed that above
+~0.97110 the OOF signal and the public LB actively disagree, and that in 3 of 7 completed
+Season-6 episodes *zero* public top-10 teams survived into the private top-10. Optimising
+against a 59k-row public split is multiple-testing, not modelling.
 
 ## When you've hit the wall
 

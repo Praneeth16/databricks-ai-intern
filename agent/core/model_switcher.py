@@ -19,8 +19,13 @@ from agent.core.effort_probe import ProbeInconclusive, probe_effort
 # Foundation Model API endpoints; users can paste any ``databricks/<endpoint>``
 # their workspace exposes, or ``anthropic/`` / ``openai/`` for direct API.
 # HF router ids still work for research-tool fallback paths.
+# Ordered most- to least-capable. Verified present on the target workspace's serving
+# endpoints on 2026-08-23 — an id listed here that isn't served breaks the default path,
+# so confirm with `databricks serving-endpoints list` before adding one.
 SUGGESTED_MODELS = [
-    {"id": "databricks/databricks-claude-opus-4-6",  "label": "Claude Opus 4.6 (Databricks FMAPI)"},
+    {"id": "databricks/databricks-claude-opus-5",  "label": "Claude Opus 5 (Databricks FMAPI)"},
+    {"id": "databricks/databricks-claude-sonnet-5", "label": "Claude Sonnet 5 (Databricks FMAPI)"},
+    {"id": "databricks/databricks-claude-opus-4-8",  "label": "Claude Opus 4.8 (Databricks FMAPI)"},
     {"id": "databricks/databricks-claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (Databricks FMAPI)"},
     {"id": "databricks/databricks-claude-haiku-4-5", "label": "Claude Haiku 4.5 (Databricks FMAPI)"},
     {"id": "databricks/databricks-gpt-oss-120b", "label": "GPT-OSS 120B (Databricks FMAPI)"},

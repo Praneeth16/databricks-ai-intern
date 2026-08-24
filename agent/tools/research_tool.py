@@ -215,10 +215,18 @@ RESEARCH_TOOL_SPEC = {
 
 
 def _get_research_model(main_model: str) -> str:
-    """Pick a cheaper model for research based on the main model."""
-    if "anthropic" in main_model:
-        return "bedrock/us.anthropic.claude-sonnet-4-6"
-    # For non-Anthropic models (HF router etc.), use the same model
+    """Pick a cheaper model for research than the one driving the main loop.
+
+    Research is read-only summarisation, so it does not need the top tier. Downshifting
+    Opus to Sonnet on the same platform is the whole intent — the previous version sent
+    Anthropic-prefixed models to Bedrock, which both leaves the Databricks-native path
+    this repo requires and pins an older model generation.
+    """
+    if main_model.startswith("databricks/") and "opus" in main_model:
+        return "databricks/databricks-claude-sonnet-5"
+    if main_model.startswith("anthropic/") and "opus" in main_model:
+        return "anthropic/claude-sonnet-5"
+    # Already a mid-tier or non-Anthropic model — reuse it rather than guess.
     return main_model
 
 
@@ -259,12 +267,11 @@ async def research_handler(
         reasoning_effort=_capped,
     )
 
-    # Get read-only tool specs from the session's tool router
-    tool_specs = [
-        spec
-        for spec in session.tool_router.get_tool_specs_for_llm()
-        if spec["function"]["name"] in RESEARCH_TOOL_NAMES
-    ]
+    # Read-only tool specs for the sub-agent. Resolved by name across every registered
+    # tool, NOT from the main loop's advertised set: most of these are deferred behind
+    # tool_search, so filtering the advertised list would hand the researcher only
+    # whatever the parent turn happened to have loaded (in practice just bash + read).
+    tool_specs = session.tool_router.get_tool_specs_by_name(RESEARCH_TOOL_NAMES)
 
     # Unique ID + short label so parallel agents show separate status lines.
     # Use the tool_call_id when available — it's unique per invocation and lets

@@ -1,0 +1,43 @@
+# Smartphone Addiction S6E8 — Kaggle Playground Series.
+# Values sourced from examples/kaggle-smartphone-addiction-s6e8/FINAL_RESULTS.md.
+#
+# Why this task is worth having alongside s6e5: the two competitions disagree about
+# validation geometry. s6e5 has a Year column and its only valid proxy was a temporal
+# holdout; s6e8 has no temporal column at all, so StratifiedKFold is correct here. An
+# eval suite containing only s6e5 would quietly teach "always hold out by time".
+id: kaggle-smartphone-addiction-s6e8
+kind: tabular
+metric: roc_auc
+higher_is_better: true
+baseline_score: 0.96324   # first hand-tuned LGBM, single 20% holdout — the naive attempt
+human_ceiling: 0.96982    # v4 XGB, measured public LB (OOF 0.968434)
+leaderboard:
+  top_public: 0.97142     # top of public LB; above ~0.97110 is argued to be LB-overfit
+  best_public_notebook: 0.97117  # highest score reachable from published work alone
+  proxy: rank_percentile
+  # Populate `scores:` with a competitor-score snapshot for a real percentile;
+  # with only `top_public`, percentile degrades to above/below-top (boolean).
+data:
+  # PLACEHOLDER paths, same as the s6e5 task: the runner is wired to a live agent in a
+  # later phase, and the holdout below cannot be applied to a submission file.
+  train: examples/kaggle-smartphone-addiction-s6e8/artifacts        # placeholder
+  test: examples/kaggle-smartphone-addiction-s6e8/artifacts/submission.csv  # placeholder
+ground_truth:
+  # The competition's own train.csv labels: (id, addicted_label AS target). Scoring an
+  # agent means re-running its pipeline against held-out fold assignments, since the
+  # Kaggle test labels are not public. CTAS this table from train.csv on a new workspace.
+  table: databricks_ai_intern.agent.kaggle_smartphone_addiction_s6e8_holdout
+  id_column: id
+  label_column: target
+holdout:
+  # No temporal or group column exists in this dataset — 12 independent features and an
+  # id that carries no signal (measured corr(id, label) = 0.0011, flat across deciles).
+  # Every published OOF library uses exactly this split, on original row order, so
+  # deviating from it makes OOF arrays unstackable.
+  type: stratified_kfold
+  folds: 5
+  shuffle: true
+  seed: 42
+budget:
+  max_cost_usd: 25.0
+  max_iterations: 30

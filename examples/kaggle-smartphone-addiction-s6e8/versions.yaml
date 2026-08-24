@@ -1,0 +1,312 @@
+# S6E8 attempt ledger.
+#
+# The standard for example folders in this repo: one parameterized `scripts/train.py`,
+# and every attempt is a row here rather than a new copy of the script. (The s6e5
+# example accumulated 26 near-duplicate scripts; this is the fix.)
+#
+# `oof_auc` / `lb_auc` are filled in after a run — they are results, not settings.
+# CV is fixed across every version so OOF arrays stay row-aligned and stackable:
+# StratifiedKFold(5, shuffle=True, random_state=42) on original row order.
+
+cv:
+  folds: 5
+  shuffle: true
+  seed: 42
+
+versions:
+  - id: v1_lgbm_raw
+    model: lgbm
+    features: [raw]
+    note: >
+      Published LGBM params on the 12 raw columns only. Establishes how much of the
+      gap is params vs features — my own first config scored 0.96324 with hand-picked
+      params, so this isolates the params half.
+    oof_auc: 0.964070
+    lb_auc: null
+
+  - id: v2_lgbm_te_freq
+    model: lgbm
+    features: [raw, te, freq]
+    note: >
+      Adds nested target encoding (smoothing=10) + transductive frequency encoding.
+      Reported as the single biggest feature win on this competition (+0.0023 CV).
+      All 12 columns are cast to string levels first, numerics included — bounded
+      low-cardinality values mean ~500 rows per level, so the smoothed means are
+      well estimated.
+    oof_auc: 0.967309
+    lb_auc: null
+
+  - id: v3_lgbm_full_fe
+    model: lgbm
+    features: [raw, te, freq, comp, lattice]
+    note: >
+      Adds composition/ratio features and the accounting residual
+      daily-(social+gaming+work), which I verified is >= 0 with ZERO violations
+      across 421k train and 182k test rows (the generator manufactured this
+      constraint; the original source data violates it 60.7% of the time).
+      Plus the decimal lattice (first fractional digit) that exposes generator
+      rounding.
+    oof_auc: 0.968243
+    lb_auc: null
+
+  - id: v4_xgb_full_fe
+    model: xgb
+    features: [raw, te, freq, comp, lattice]
+    note: Same feature set, different learner — for blend diversity.
+    oof_auc: 0.968434
+    lb_auc: 0.969820
+
+  - id: v5_cat_native
+    model: cat
+    features: [raw, comp, lattice]
+    note: >
+      CatBoost with native categorical handling and ordered target statistics.
+      Deliberately NOT given the hand-rolled target encoding: its per-row adaptive
+      shrinkage is reported to beat constant smoothing by +0.0004, so pre-encoding
+      would throw that away.
+    oof_auc: 0.961154
+    lb_auc: null
+
+  - id: v6_logit_stack
+    model: stack
+    members: [v2_lgbm_te_freq, v3_lgbm_full_fe, v4_xgb_full_fe, v5_cat_native]
+    note: >
+      Logit-space stack with a LogisticRegression meta-learner, fitted honestly
+      (each row scored by a meta-model that never saw its own fold). Logit space
+      beats raw-probability averaging by ~+0.0005 and rank-averaging by ~+0.0027
+      at this saturation level, because ranks lose resolution when members
+      correlate above 0.99.
+    oof_auc: 0.968503
+    lb_auc: 0.969790
+
+  # ---- second pass, aiming at the 0.9711 published ceiling rather than 0.9698 ----
+  #
+  # Triage for these ran as paired single-fold comparisons on fold 0 of the same split
+  # (fast LGBM, lr=0.05, max_bin=127), so the only difference between arms is the block
+  # under test. Measured there:
+  #   base (v3 feature set)              0.967168
+  #   + identity (weekend-window block)  0.967357   +0.00019   -> kept
+  #   + row-level NaN counts             0.967189   +0.00002   -> dropped
+  #   + pairwise TE, all 66 pairs        0.966925   -0.00024   -> rejected
+  #   + pairwise frequency, all 66       0.966955   -0.00021   -> rejected
+
+  - id: v7_xgb_ident_bag
+    model: xgb
+    features: [raw, te, freq, comp, lattice, identity]
+    seeds: [42, 777, 2026]
+    params:
+      learning_rate: 0.015
+      n_estimators: 9000
+    note: >
+      v4 plus the identity block, three model seeds averaged inside each fold, and a
+      lower learning rate with the round budget to use it. Seed averaging cuts the
+      variance that the OOF->LB offset is mostly made of; it does not change the split,
+      so this OOF stays row-aligned with every earlier version.
+    oof_auc: 0.968655
+    lb_auc: 0.969920
+
+  - id: v8_lgbm_strong
+    model: lgbm
+    features: [raw, te, freq, comp, lattice, identity]
+    seeds: [42, 777]
+    params:
+      learning_rate: 0.01
+      max_bin: 511
+      num_boost_round: 14000
+      early_stopping_rounds: 300
+    note: >
+      The reference-strength LightGBM the first pass could not afford. max_bin 511 rather
+      than the published 1023: the published config measured ~15x slower per fold than the
+      XGBoost member and most of that was the bin count, so this takes the half of the
+      slowdown that carries the gain.
+    oof_auc: 0.968548
+    lb_auc: null
+
+  - id: v9_cat_encoded
+    model: cat
+    features: [raw, te, freq, comp, lattice, identity]
+    params:
+      iterations: 8000
+      learning_rate: 0.03
+      depth: 7
+    note: >
+      Fixes the v5 design error. v5 withheld the hand-rolled target encoding from CatBoost
+      to let its ordered target statistics do that job, and lost 0.006 for it. This gives
+      CatBoost the same features as every other member, so its contribution to a stack is
+      about its mechanism rather than its handicap.
+    oof_auc: 0.968241
+    lb_auc: null
+
+  - id: v10_tabm
+    model: tabm
+    features: [raw, te, freq, comp, lattice, identity]
+    seeds: [42]
+    note: >
+      TabM (k=32 batch-ensembled MLP with piecewise-linear numeric embeddings) on MPS.
+      This is the only member whose mechanism is not a decision tree, and the stack
+      analysis in FINAL_RESULTS.md says that is exactly what the first pass lacked: four
+      GBMs correlating above 0.996 gave the stack +0.00007. The bar it has to clear is the
+      ~0.966 solo-OOF cliff below which a member contributes on strength, not diversity.
+    oof_auc: 0.968006
+    lb_auc: null
+
+  - id: v11_hillclimb
+    model: stack
+    meta: hillclimb
+    members: [v2_lgbm_te_freq, v3_lgbm_full_fe, v4_xgb_full_fe, v5_cat_native,
+              v7_xgb_ident_bag, v8_lgbm_strong, v9_cat_encoded, v10_tabm]
+    note: >
+      Greedy forward weight search on AUC in logit space, fitted per outer fold so no row
+      is scored by weights that saw its own OOF value. Hill-climbing optimises the metric
+      directly and cannot go negative, which is what a logistic meta-learner does when two
+      members correlate above 0.99 — the v6 failure mode.
+    oof_auc: null
+    lb_auc: 0.970520
+
+  - id: v12_tabm_s777
+    model: tabm
+    features: [raw, te, freq, comp, lattice, identity]
+    seeds: [777]
+    note: >
+      A second TabM seed as its own member rather than averaged into v10. Neural training
+      has far more seed variance than a tree build, so two seeds are worth carrying
+      separately and letting the hill-climb decide what each is worth.
+    oof_auc: null
+    lb_auc: null
+
+  - id: v13_lookup
+    model: lookup
+    features: [raw]
+    seeds: [42]
+    note: >
+      Lookup-Transformer, ported from tamerlanomralinov's public notebook (LB 0.97041),
+      which is the strongest single model published on this competition and beats every GBM
+      here including ours. Its premise is measured, not stylistic: the generator memorised
+      value->label pairs from the small source dataset, so a column's exact quantised value
+      is a lookup key rather than a magnitude -- notifications_per_day has univariate AUC
+      0.492 yet its per-value residuals correlate 0.72 across independent halves. So each
+      column gets an embedding table over its exact values, plus a periodic-linear encoder
+      for the smooth part, plus derived budget tokens for the accounting identity, read out
+      through attention. Neither the lookup nor a 4-term linear constraint is representable
+      by axis-aligned splits at any data volume, which is why this is the first member here
+      that is a different model rather than a different tree.
+    oof_auc: 0.968293
+    lb_auc: null
+
+  - id: v14_lookup_bag
+    model: lookup
+    features: [raw]
+    seeds: [42, 777, 2026]
+    note: >
+      The lookup transformer with three model seeds averaged inside each fold. It took 44%
+      of the hill-climb weight at one seed, which makes its own variance the largest single
+      source of variance in the blend -- and on an A10 a seed costs 18 minutes, so this is
+      the cheapest remaining gain in the ladder.
+    oof_auc: 0.968727
+    lb_auc: null
+
+  - id: v15_lookup_wide
+    model: lookup
+    features: [raw]
+    seeds: [42]
+    params:
+      d: 192
+      layers: 6
+      heads: 8
+      drop: 0.12
+      epochs: 40
+    note: >
+      A wider, deeper lookup transformer. Two purposes: more capacity for the embedding
+      tables that carry this dataset's signal, and intra-family diversity -- the pool's
+      only decorrelated member is the lookup, and TabM measured 0.9945 against the trees
+      because it was fed the same target-encoded features. We read that as decorrelation
+      coming from the input representation, so a second variant of THIS representation
+      looked worth more than a third architecture on the GBM feature set.
+      NOTE: a later controlled experiment (notebooks/lookup-transformer.ipynb) refuted
+      that mechanism. A strength-matched MLP on the same encoded features measures 0.9665
+      against the trees, statistically level with the lookup's 0.9658, and the two nets
+      correlate 0.9782 with each other. The lookup's value is strength inside an already
+      decorrelated family, not the representation's decorrelation. v15 is still a fair
+      bet on other grounds, but not for the reason stated above.
+    oof_auc: 0.968147
+    lb_auc: null
+
+  - id: v16_lookup_aug
+    model: lookup
+    features: [raw]
+    seeds: [42]
+    params:
+      aug: 0.25
+      drop: 0.15
+      epochs: 40
+    note: >
+      Same architecture, much heavier missingness augmentation. Missingness is MCAR here
+      at 4-19% per column, so masking is a legitimate augmentation over the same
+      distribution the test set was drawn from, and a model trained under heavier masking
+      makes different mistakes from one trained under light masking.
+    oof_auc: 0.968154
+    lb_auc: null
+
+  - id: v17_realmlp
+    model: realmlp
+    features: [raw, te, freq, comp, lattice, identity]
+    seeds: [42]
+    note: >
+      RealMLP-TD, ported from zhenruiweng's public notebook, which scores LB 0.97009 as a
+      single model on this competition -- higher than any published GBM here. Carried for
+      strength rather than decorrelation: it sees the same target-encoded features as the
+      trees, and TabM on that same feature set measured 0.9945 against them.
+    oof_auc: 0.968282
+    lb_auc: null
+
+  # ---- the fold count, which is the last untapped honest gain -------------------
+  #
+  # The published lookup transformer measured OOF 0.96872 at 11 folds; ours measured
+  # 0.968293 at 5 with the same architecture. That is +0.0004 for the same model from fold
+  # count alone -- more training rows per fold model, and a test prediction averaged over
+  # twice as many models. Mixed fold counts still stack: every train row gets exactly one
+  # out-of-fold prediction either way.
+
+  - id: v19_lookup_bag_10f
+    model: lookup
+    features: [raw]
+    folds: 10
+    seeds: [42, 777, 2026]
+    note: >
+      The blend's heaviest member (0.495 weight) at 10 folds. 30 fits on an A10, about two
+      hours -- affordable exactly because the neural work moved off the laptop.
+    oof_auc: 0.968908
+    lb_auc: null
+
+  - id: v20_xgb_ident_bag_10f
+    model: xgb
+    features: [raw, te, freq, comp, lattice, identity]
+    folds: 10
+    seeds: [42, 777, 2026]
+    params:
+      learning_rate: 0.015
+      n_estimators: 9000
+    note: >
+      v7 at 10 folds. Hyperparameters deliberately unchanged: a 30-trial Optuna sweep on
+      this feature set scored 0.966850 against the incumbent's 0.966853 on the same
+      subsample and fold, so tuning is exhausted here and the fold count is not.
+    oof_auc: 0.968778
+    lb_auc: null
+
+# Hypotheses deliberately NOT pursued, each with the reason. Recorded so the agent
+# (and the next person) does not spend compute re-deriving them.
+rejected:
+  - idea: NaN-indicator features
+    evidence: "measured -0.00001 here; missingness is MCAR"
+  - idea: Concatenating the original 7,500-row source dataset
+    evidence: "-0.0001; the original violates the accounting identity 60.7% of the time, the synthetic never does"
+  - idea: Pseudo-labelling confident test rows
+    evidence: "-0.0034, the worst single move reported on this competition; matches the s6e5 finding that pseudo-labelling is circular on a high-AUC model"
+  - idea: Monte-Carlo marginalisation over missing features
+    evidence: "measured 0.95240 vs 0.96328; sampling from marginals discards feature correlations"
+  - idea: Constrained mutual imputation of daily <-> weekend
+    evidence: "measured 0.96309 vs 0.96324; the synthetic only preserves the U(0.5,3) window for ~54% of comparable rows"
+  - idea: Neural members (TabM / ResNet / MLP-PLR)
+    evidence: "below the ~0.966 solo-OOF cliff, contribute <=0.00002 to a GBM stack already at 0.968+"
+  - idea: Blending other competitors' public submissions
+    evidence: "would lift LB past 0.9711 but is not our own modelling; same call as s6e5"
