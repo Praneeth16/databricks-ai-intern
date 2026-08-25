@@ -1,5 +1,5 @@
 """Assemble the percent-format sources into the Kaggle notebook."""
-import json, pathlib, uuid
+import ast, json, pathlib, uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
 src = (HERE / "tabfm-deep-dive.src.py").read_text()
@@ -38,4 +38,14 @@ text = "\n".join("".join(c["source"]) for c in cells)
 bad = sorted({ch for ch in text if ord(ch) > 127})
 md = sum(1 for c in cells if c["cell_type"] == "markdown")
 print(f"cells={len(cells)} md={md} code={len(cells)-md} non_ascii={bad or 'none'} chars={len(text)}")
-assert not bad, f"non-ascii present: {bad}"
+if bad:
+    print(f"note: non-ascii kept (emoji/typography allowed): {bad}")
+
+# Kaggle truncates kernel titles at 50 characters, silently, and every code cell
+# has to parse before a push burns a GPU re-run on a SyntaxError.
+meta = json.loads((HERE / "kernel-metadata.json").read_text())
+assert len(meta["title"]) <= 50, f"title is {len(meta['title'])} chars, Kaggle caps at 50"
+for i, c in enumerate(cells):
+    if c["cell_type"] == "code":
+        ast.parse("".join(c["source"]))
+print(f"title={len(meta['title'])}/50 chars; all code cells parse")

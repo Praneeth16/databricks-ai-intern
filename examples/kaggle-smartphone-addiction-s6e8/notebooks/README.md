@@ -3,7 +3,7 @@
 ## `lookup-transformer.ipynb`
 
 Published to Kaggle as
-[Lookup-Transformer and the Control That Refuted Me](https://www.kaggle.com/code/paiky1995/lookup-transformer-and-the-control-that-refuted-me).
+[S6E8: Correlation Does Not Predict Contribution](https://www.kaggle.com/code/paiky1995/s6e8-correlation-does-not-predict-contribution).
 
 Standalone teaching notebook built from this example's second pass. It is not the competition
 pipeline. It isolates one question into a controlled experiment that runs end to end on a Kaggle
@@ -90,7 +90,14 @@ Two Kaggle-specific things cost real time:
   device`. Set `machine_shape: NvidiaTeslaT4`. The notebook probes CUDA with a real operation at
   setup so this surfaces immediately.
 - Changing a kernel's `title` moves its slug; the old URL 404s. Update `id` in the metadata to
-  match afterwards or the next push creates a second kernel.
+  match afterwards or the next push creates a second kernel. Push with the *current* `id` and the
+  new `title`: Kaggle renames in place and warns that the title does not resolve to the id, which
+  is expected. Slugs are predictable (lowercase, every non-alphanumeric run to one hyphen,
+  trimmed), so cross-links can be written before the rename.
+- **Kaggle truncates titles at 50 characters, silently.** Every notebook in this competition's
+  top 30 is at or under it. Both titles here are checked against that cap.
+- `build.py` no longer asserts pure ASCII, it only reports non-ASCII. Emoji in titles are allowed
+  and are the local convention in this competition; they are dropped from the slug.
 
 ### Files
 
@@ -116,10 +123,21 @@ table covering the competition submissions.
 
 ---
 
+## Companion dataset
+
+[S6E8 OOF Library: 11 Neural Members](https://www.kaggle.com/datasets/paiky1995/s6e8-oof-library-11-members)
+(CC0) publishes the OOF and test vectors for the 11 neural members from the competition pipeline
+(`v10`, `v13`-`v17`, `v19`, `v21`-`v24`), staged out of the UC Volume. Deliberately the complement
+to the tree-heavy OOF libraries already public in this competition. Both notebooks link to it.
+
+Rebuild it from `/tmp/s6e8_oof_dataset` with `kaggle datasets version -p .`; note that
+`kaggle datasets create` is private by default, so pass `-u` for public, and that version history
+stays downloadable, so never let an internal path into v1.
+
 ## `tabfm/tabfm-deep-dive.ipynb`
 
 Published to Kaggle as
-[TabFM Deep Dive: Architecture and Context Limits](https://www.kaggle.com/code/paiky1995/tabfm-deep-dive-architecture-and-context-limits).
+[S6E8: TabFM zero-shot on 0.7% of the data](https://www.kaggle.com/code/paiky1995/s6e8-tabfm-zero-shot-on-0-7-of-the-data).
 
 A deep dive into [google-research/tabfm](https://github.com/google-research/tabfm), Google
 Research's zero-shot tabular foundation model (released 2026-06-16), applied to this competition.
