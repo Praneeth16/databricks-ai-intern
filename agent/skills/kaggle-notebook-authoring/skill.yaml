@@ -1,0 +1,34 @@
+name: kaggle-notebook-authoring
+version: 1.0.0
+summary: |
+  Playbook for publishing a Kaggle notebook that actually gets read. Covers the
+  hard API limits (50-char title cap, deterministic slugs, push-triggers-a-run),
+  the first-screen rules that decide the upvote, what to ship alongside the
+  notebook (a CC0 OOF dataset outranks an argument), and the distribution step
+  most authors skip. Encodes a measured failure: two technically strong S6E8
+  notebooks sat at 0 votes for 20 hours, and the first vote arrived after only
+  the title and opening screen changed. Companion to
+  kaggle-tabular-classification, which covers winning rather than publishing.
+
+triggers:
+  # Matched case-insensitively against the task description and recent user
+  # turns. Load the playbook via read_skill BEFORE writing notebook prose,
+  # choosing a title, or running any kaggle push.
+  - "publish a notebook"
+  - "public notebook"
+  - "kaggle notebook"
+  - "kernel-metadata"
+  - "kaggle kernels push"
+  - "kaggle datasets create"
+  - "upvote"
+  - "write up"
+  - "writeup"
+  - "share my solution"
+  - "OOF library"
+
+applies_when:
+  task_shape: authoring             # writing/publishing, not modelling
+  target_platform: kaggle           # kernels + datasets API
+  audience: public                  # a private notebook needs none of this
+
+playbook: playbook.md

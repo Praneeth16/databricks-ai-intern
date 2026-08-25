@@ -1,116 +1,121 @@
 # %% [markdown]
-# # Lookup-Transformer and the control that refuted me
+# # Correlation does not predict what a blend member is worth
+#
+# ## S6E8: two models equally decorrelated from my trees differed 44x in what they added
+#
+# Everyone on this leaderboard is told to chase diversity. I measured what diversity is actually
+# worth, with strength-matched controls, and the usual rule of thumb did not survive it.
+#
+# | member | reads | solo OOF AUC | Spearman vs trees | added on top of xgb+lgb |
+# |---|---|---|---|---|
+# | `xgboost` | TE + freq + raw + budget | 0.968454 | 0.9990 (vs lgbm) | baseline |
+# | `lightgbm` | same | 0.968331 | 0.9990 (vs xgb) | baseline |
+# | `mlp_magnitudes` | magnitudes + masks only | 0.941125 | **0.9416** | +0.000008 |
+# | `mlp_encoded` | the trees' own matrix | 0.965032 | 0.9665 | +0.000013 |
+# | `lookup_transformer` | learned vector per exact value | 0.968305 | 0.9658 | **+0.000577** |
+#
+# Read the last two rows. Same correlation with the trees to within 0.001, and a **44x** difference
+# in contribution. Then read the row above them: the *most* decorrelated model in the pool
+# contributes 0.000008, which is zero. Rank these three by decorrelation and by contribution and
+# the orderings are scrambled.
+#
+# > What separates them is **strength at equal diversity**. Any model outside your current family
+# > is already decorrelated from it. That part is free. The scarce input is a member strong enough
+# > for the decorrelation to cash out.
+#
+# ### What you get if you fork this
+#
+# 1. A working **Lookup-Transformer** that scores level with a tuned GBDT (0.968305 vs 0.968454),
+#    trained from scratch here on a T4 with no external dependencies.
+# 2. **Every member's OOF and test predictions**, exported on a frozen
+#    `StratifiedKFold(5, shuffle=True, random_state=42)` split, so you can stack them into your own
+#    blend without refitting anything.
+# 3. A **leave-one-out and incremental ablation** you can run over your own pool, which is the only
+#    cheap way to know what a member is really worth.
+# 4. Nine measured negative results, so you can skip directions that are already exhausted.
+#
+# And separately, [**S6E8 OOF Library: 11 Neural Members**](https://www.kaggle.com/datasets/paiky1995/s6e8-oof-library-11-members) (CC0): out-of-fold and test
+# predictions for 11 more neural models from my full competition pipeline, on the same frozen
+# folds. Most public OOF libraries for this competition are boosted-tree-heavy, so if your pool
+# is already saturated with trees, that is the half you are missing.
+#
+# ### Contents
+#
+# | | |
+# |---|---|
+# | [1. Setup](#1.-Setup) | device probe, data, frozen folds |
+# | [2. These floats are categorical](#2.-The-evidence:-these-floats-are-categorical) | 401 distinct values in a float column |
+# | [3. Feature engineering](#3.-Feature-engineering-for-the-tree-baselines) | target encoding refit inside every fold |
+# | [4. Tree baselines](#4.-Tree-baselines) | xgboost, lightgbm |
+# | [5. Shared neural trainer](#5.-Shared-preparation-for-both-neural-networks) | one trainer, and the EMA bug that cost me a day |
+# | [6. The obvious control](#6.-The-obvious-control) | a result that looks like a win and is not |
+# | [7. The Lookup-Transformer](#7.-The-Lookup-Transformer) | tokenising exact values |
+# | [8. The measurement](#8.-The-measurement) | **where my theory died** |
+# | [9. Blending](#9.-Blending) | non-negative hill-climb |
+# | [10. Correlation vs contribution](#10.-Does-correlation-predict-contribution?) | **the 44x result** |
+# | [11. What did not work](#11.-Things-that-did-not-work) | capacity, augmentation, Optuna, NaN counts |
+# | [12. Takeaways](#12.-Takeaways) | eight of them |
+#
+# ---
+#
+# ### The theory I set out to prove, and how it died
 #
 # Playground S6E8 is saturated. 2,692 teams, and 203 of them sit inside a 0.0002 AUC band. The
-# gap from 1st to 10th is 0.00012, smaller than the noise of the public split. In that regime
-# tuning a gradient-boosted tree harder is not a strategy, because every GBDT on the leaderboard
-# is making almost the same mistakes on almost the same rows. What moves the number is a model
+# gap from first to tenth is 0.00012, which is smaller than the noise of the public split.
+#
+# In that regime, one more round of hyperparameter tuning is not a strategy. Every gradient-boosted
+# tree on the leaderboard is making almost the same mistakes on almost the same rows, and averaging
+# two models that agree tells you nothing you did not already know. What moves the number is a model
 # that is **wrong differently**.
 #
-# I had a theory about where "differently" comes from. I thought it came from input
-# representation: that a model reading each feature value as a token identity would decorrelate
-# from models reading it as a magnitude, and that this mattered more than which architecture you
-# picked. I built a controlled experiment to demonstrate it.
+# So: where does "differently" come from?
 #
-# The experiment refuted the theory, and then handed me a better one. Both parts are below.
+# I had an answer I liked. I thought it came from the **representation** rather than the
+# architecture: that a model reading each feature value as a token identity would disagree with
+# models reading it as a magnitude, and that this mattered more than whether you reached for a
+# transformer or a tree. It is a tidy idea. It predicts something specific. And it turns out to be
+# wrong, which I only discovered because I built the one control that could kill it.
 #
-# ### The setup
+# The table above is the ending. The rest of the notebook is the experiment in the order it actually
+# happened, because the reasoning is the part you can reuse and the number is not.
 #
-# Five models, one frozen fold definition. Two trees, then three models sharing a single training
-# function with the same optimizer, schedule, augmentation rate and EMA, differing only in what
-# they are allowed to read.
+# ### The route
 #
-# | member | reads | solo OOF AUC | Spearman vs trees | blend weight | added on top of the two trees |
-# |---|---|---|---|---|---|
-# | `xgboost` | target + frequency encoding, raw values, budget features | 0.968454 | 0.9990 with LightGBM | 0.3251 | |
-# | `lightgbm` | same | 0.968331 | 0.9990 with XGBoost | 0.1627 | |
-# | `mlp_magnitudes` | rank-gauss magnitudes and missing masks only | 0.941125 | 0.9416 | 0.0000 | +0.000008 |
-# | `mlp_encoded` | the trees' exact feature matrix, rank-gauss scaled | 0.965032 | 0.9665 | 0.0159 | +0.000013 |
-# | `lookup_transformer` | a learned vector per **exact value**, plus gated magnitudes | 0.968305 | 0.9658 | **0.4963** | **+0.000577** |
+# > **Read the data** -> build two tree baselines -> build a transformer that reads exact values ->
+# > add two controls -> measure who disagrees with whom -> discover the theory is wrong ->
+# > find out what was actually going on
 #
-# ### Where the theory died
+# ### The rules I am playing by
 #
-# My theory predicted `mlp_encoded` would sit near 0.99 against the trees. It is a neural network
-# fed the trees' own features, so on my theory it should behave like the trees. It measured
-# **0.9665**, indistinguishable from the Lookup-Transformer's **0.9658**. The two neural networks
-# correlate **0.9782 with each other**, higher than either correlates with either tree.
+# Four commitments, because a notebook about measurement should say up front what would make its
+# measurements worthless:
 #
-# The decorrelation boundary in this pool runs between trees and neural networks. It does not run
-# between magnitudes and identities. Changing the representation inside the neural family bought
-# no measurable diversity at all.
-#
-# ### Where it gets interesting
-#
-# Look at the last two columns. `mlp_encoded` and `lookup_transformer` have effectively the same
-# correlation with the trees, 0.9665 against 0.9658, and their contributions to the blend differ
-# by more than **40-fold**. One is worth +0.000013 and the other +0.000577. Removing the
-# Lookup-Transformer costs 0.000563 of blend AUC; removing either MLP costs nothing measurable,
-# and removing `mlp_magnitudes` costs literally 0.000000.
-#
-# So correlation, on its own, predicts nothing. Rank these three by how decorrelated they are
-# from the trees and you get `mlp_magnitudes`, `lookup_transformer`, `mlp_encoded`. Rank them by
-# what they actually contribute and you get `lookup_transformer`, `mlp_encoded`,
-# `mlp_magnitudes`. The orderings are scrambled.
-#
-# What separates them is **strength at equal diversity**. The whole neural family was already
-# decorrelated from the trees. What it lacked was a member strong enough for that decorrelation
-# to be worth anything, and `mlp_encoded` at 0.965032 is not that member, because it is 0.0033
-# behind the trees it is supposed to be complementing.
-#
-# The Lookup-Transformer is that member, at 0.968305, level with a tuned GBDT. And the reason it
-# gets there is the representation: same trainer, same schedule, same everything, learned
-# per-value embeddings instead of hand-built target encoding, and **+0.0033 AUC** for it.
-#
-# So the corrected claim, which the data does support:
-#
-# > Per-value embeddings did not buy diversity. They bought **strength inside a family that was
-# > already diverse**, and that is what made the diversity cash out.
-#
-# ### The trap, stated plainly
-#
-# My first version of this notebook had only `mlp_magnitudes` as the control. It correlates
-# 0.9416 with the trees, which is *lower* than the Lookup-Transformer's 0.9658. Read carelessly
-# that looks like a spectacular confirmation: the magnitude model is far from the trees, the
-# identity model is far from the trees, so representation must be what matters.
-#
-# It is nothing of the kind. `mlp_magnitudes` is 0.027 AUC weaker than everything else in the
-# pool, and **any sufficiently weak model decorrelates**, because it is largely producing noise.
-# Correlation is only interpretable between models of comparable strength. Adding the
-# strength-matched control is the single step that turned a confirmation into a refutation, and it
-# cost one extra cell.
-#
-# ### A note on the last decimal
-#
-# The figures in this summary are from the run that produced this notebook's outputs. Rerunning
-# moves them in the sixth decimal place, because LightGBM's threaded histogram construction and
-# the GPU kernels underneath the two networks are not bit-deterministic. The fold definition,
-# the feature construction and the seeds are all fixed, so what drifts is arithmetic order, not
-# methodology. The hill-climb weights move a little more than the AUCs do, which is what you
-# should expect from a greedy search over highly correlated members: they trade weight almost
-# arbitrarily among themselves. That is exactly why section 10 measures contribution by ablation
-# instead of reading it off the weights, and the ablation numbers reproduced to the sixth decimal
-# across two full runs.
-#
-# ### What you get here
-#
-# 1. The evidence that this dataset's floats are secretly categorical, measured before modelling.
-# 2. A Lookup-Transformer built from scratch, one component at a time, with the reason for each.
-#    It scores level with a tuned GBDT, so it is a working model and not only a lesson.
-# 3. Two controls sharing one trainer, and the arithmetic that killed my hypothesis.
-# 4. Leave-one-out and incremental blend analysis, which is what exposed that correlation and
-#    contribution disagree.
-# 5. The EMA bug that made my first run score 0.45 AUC and look like a flipped label.
-# 6. Negative results, including a 40-trial Optuna sweep that bought 0.000003.
-# 7. Every member's out-of-fold and test predictions saved on the frozen folds, so you can stack
-#    them into your own blend without refitting anything.
+# 1. **One frozen split, no exceptions.** `StratifiedKFold(5, shuffle=True, random_state=42)` over
+#    the original row order, for every model. That is what makes the out-of-fold arrays row-aligned
+#    and the correlations between them meaningful.
+# 2. **Target encoding is refit inside every training fold.** Fit it once on all the training data
+#    and cross-validate afterwards and your score inflates by about 0.001, and every blend weight
+#    you then fit is optimising against a fiction.
+# 3. **One trainer for every neural model.** Same optimizer, schedule, augmentation rate and EMA.
+#    If two networks differ in this notebook, they differ in what they are allowed to *read*, and
+#    nothing else.
+# 4. **Predictions stay in float64.** At an AUC of 0.968 over 296,302 test rows, float32 rounding
+#    reorders enough ties to move the fourth decimal, and the fourth decimal is the competition.
 #
 # ### Credit where it is due
 #
 # The Lookup-Transformer idea is not mine. I ported it from
 # [tamerlanomralinov's notebook](https://www.kaggle.com/code/tamerlanomralinov/s6e8-lookup-transformer-insights-lb-0-97041)
 # (LB 0.97041) and retrained it from scratch on my own folds. What I add is the controlled
-# comparison, the EMA fix, and the blend analysis. If this notebook is useful, upvote that one
+# comparison, the EMA fix, and the ablation analysis. If this notebook is useful, upvote that one
 # too.
+#
+# ### Companion notebook
+#
+# [S6E8: TabFM zero-shot on 0.7% of the data](https://www.kaggle.com/code/paiky1995/s6e8-tabfm-zero-shot-on-0-7-of-the-data)
+# tests the conclusion above rather than repeating it. It takes Google's 1.6-billion-parameter
+# tabular foundation model, the most decorrelated member obtainable, and checks whether the
+# strength rule correctly predicts that it contributes nothing. It does.
 
 # %% [markdown]
 # ## 1. Setup
@@ -245,6 +250,21 @@ card
 # `gaming_hours == 1.59` is not a point on a continuum that happens to be near 1.58. It is a
 # **level** that roughly 1,400 training rows belong to, with its own empirical target rate that
 # the model can learn directly.
+#
+# ### The same thing, without the statistics
+#
+# Postcodes are numbers. `90210` really is greater than `10001`. You can subtract them, average
+# them, sort them, fit a regression on them. None of that means anything, because the number is a
+# **name**, not a quantity, and the useful fact about `90210` is which neighbourhood it labels.
+#
+# That is the question to ask of `gaming_hours == 1.59`. Is 1.59 a quantity, so that rows near it
+# behave similarly? Or is it a name, so that the useful fact is which 1,400 rows carry that exact
+# label and what their average target happens to be? The cardinality count says it can be read as a
+# name, and the model that can exploit a name is not the same as the model that can exploit a
+# quantity.
+#
+# The honest answer is that it is a bit of both here, which is why the architecture below keeps both
+# readings rather than choosing.
 #
 # A tree can only ever approach that through thresholds. It splits on `gaming_hours <= 1.59`,
 # which forces the target rate of level 1.59 to be an average with its neighbours. With enough
@@ -742,32 +762,21 @@ def train_net(build_model, splits, augment, y_tr, y_va, seed, tag):
 # violently with a full run is more often an averaging artefact than a data bug.
 
 # %% [markdown]
-# ## 6. Two controls, because one was not enough
+# ## 6. The obvious control
 #
-# The comparison I actually want is: hold the trainer fixed, vary only what the model reads.
-# That needs two MLPs, not one, and the reason is worth spelling out because my first attempt
-# at this notebook got it wrong.
+# Time to test the theory. It says the Lookup-Transformer will disagree with the trees because of
+# what it reads, not because of what it is. The clean way to test that is to hold the architecture
+# family fixed and vary only the input.
 #
-# **Control A, magnitudes only.** Rank-gauss values, missing masks, the derived budget block,
-# and one-hot categoricals. No per-value information of any kind.
+# So: a neural network that reads **magnitudes only**. Rank-gauss values, missing masks, the derived
+# budget block, one-hot categoricals. No per-value information of any kind. Same trainer as the
+# Lookup-Transformer, same optimizer, same schedule, same augmentation rate, same EMA. The only
+# thing withheld is the ability to give an exact value its own parameters.
 #
-# **Control B, the same magnitudes plus the trees' encodings.** Identical architecture,
-# identical trainer, but fed the exact feature matrix the trees consume, target encoding
-# included, refit per fold and then rank-gauss transformed. This is the strength-matched
-# control.
+# If the theory is right, this network should behave like the trees, because like the trees it sees
+# only magnitudes. And the Lookup-Transformer should be the one that stands apart.
 #
-# Control A alone is not a valid control, and this is the trap. It scores far below the trees,
-# so if it also decorrelates from them, you cannot tell whether that is because it reads a
-# different representation or simply because it is a worse model. Any weak model decorrelates.
-# Control B removes that confound: it is given the same information the trees have, in magnitude
-# form, so if it lands near the trees in both score and correlation, then the trainer and the
-# architecture are ruled out as sources of diversity.
-#
-# The gap between A and B is itself the most direct evidence for what this dataset is. Both are
-# the same network. B differs only by receiving a scalar summary of each exact value's target
-# rate. If that one addition is worth a large amount of AUC, then the signal here lives in value
-# identity rather than in magnitude, which is precisely the premise the Lookup-Transformer is
-# built on.
+# Watch its solo AUC when it finishes. It matters more than it looks.
 
 # %%
 CAT_ONEHOT = []
@@ -831,13 +840,48 @@ def fit_mlp_raw(i_tr, i_va, fold):
 auc_mlp_raw = run_cv("mlp_magnitudes", fit_mlp_raw)
 
 # %% [markdown]
-# Now control B. The features have to be built inside the fold because they contain target
-# encoding, so this is where the refactored `train_net` earns its signature: the exact same
-# trainer, handed per-fold tensors instead of slices of a global one.
+# ### A result that looks like a win, and is not
 #
-# The quantile transform is also fit on the training fold only. Fitting it on all rows would
-# leak no labels, but it would let the validation rows shape their own scaling, and having just
-# been burned by an invalid control I would rather not have to argue about it.
+# Two things to notice, and they pull in opposite directions.
+#
+# The first is exciting. Section 8 will show the full correlation matrix, but if you check this
+# network against the trees now you will find it sits **further** from them than the
+# Lookup-Transformer does. Read quickly, that is a spectacular confirmation: the magnitude model is
+# far from the trees, the identity model is far from the trees, so representation must be what
+# separates models. Theory proved, notebook over.
+#
+# The second is the reason it is not. Look at its solo AUC against the trees' 0.968. It is not close.
+# It is not in the same conversation.
+#
+# And that ruins the first observation completely, because of a fact about correlation that is easy
+# to forget:
+#
+# > **Any sufficiently bad model is decorrelated from everything.** A model that is mostly producing
+# > noise cannot agree with anyone, including other bad models. Its low correlation is not evidence
+# > that it sees something different. It is evidence that it barely sees anything.
+#
+# Think of two students grading the same exam. If both are competent, they agree closely, and their
+# disagreements are informative: the questions they split on are the genuinely ambiguous ones. Now
+# replace one with a student who answers at random. Their agreement collapses, but you have learned
+# nothing about the exam. You have learned that one of them is guessing.
+#
+# So this control cannot distinguish the two explanations I care about. Is the magnitude model far
+# from the trees because it reads a different representation, or just because it is weak? On this
+# evidence, no way to tell. **The control is not a control.**
+#
+# The fix is a second one, matched for strength: the same network, same trainer, same everything,
+# but fed the trees' own feature matrix, target encoding included, refit inside each fold. If a
+# neural network given the trees' information lands near the trees in both score and correlation,
+# then the architecture is ruled out and only the representation is left standing. If it lands far
+# from them, the theory survives.
+#
+# The quantile transform is fit on the training fold only. It leaks no labels either way, but having
+# just been burned by an invalid control I would rather not have to argue about a second one.
+#
+# One more thing this comparison gives away for free: control A and control B are the same network
+# differing by one feature family, the per-value target rate. Whatever the gap between them turns
+# out to be is a direct measurement of how much of this dataset's signal lives in value identity
+# rather than magnitude.
 
 # %%
 def fit_mlp_encoded(i_tr, i_va, fold):
@@ -1204,6 +1248,51 @@ print("leave-one-out: what the blend loses when each member is removed")
 display(pd.DataFrame(loo))
 print(f"incremental value added on top of xgboost + lightgbm (base {base:.6f})")
 display(pd.DataFrame(incremental))
+
+# %% [markdown]
+# ### The picture that makes the point
+#
+# Two panels, three neural members, one axis swapped between them. Left: contribution against solo
+# strength. Right: contribution against decorrelation from the trees, which is the axis most public
+# notebooks select on. If decorrelation were the thing that pays, the right panel would slope down
+# and to the right. It does not slope at all.
+
+# %%
+gain_of = {r["added_to_trees"]: r["gain"] for r in incremental
+           if r["added_to_trees"] != "nothing"}
+neural = [n for n in names if n not in trees]
+
+fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(13, 4.8))
+COLOR = {"mlp_magnitudes": "#c44e52", "mlp_encoded": "#dd8452",
+         "lookup_transformer": "#4c72b0"}
+FLOOR = 5e-6  # so a member worth ~nothing is still visible on a log axis
+
+for ax, xs, xlabel, title in (
+    (ax_l, {n: solo[n] for n in neural}, "solo OOF AUC",
+     "Contribution tracks strength"),
+    (ax_r, {n: tree_corr[n] for n in neural},
+     "mean Spearman correlation with the two trees",
+     "Contribution ignores decorrelation"),
+):
+    for n in neural:
+        ax.scatter(xs[n], max(gain_of[n], FLOOR), s=190, zorder=3,
+                   color=COLOR[n], edgecolor="black", linewidth=0.6)
+        ax.annotate(f"{SHORT.get(n, n)}\n+{gain_of[n]:.6f}", (xs[n], max(gain_of[n], FLOOR)),
+                    textcoords="offset points", xytext=(10, -6), fontsize=8.5)
+    ax.set_yscale("log")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("AUC gained when added to xgb + lgbm")
+    ax.set_title(title)
+    ax.grid(alpha=0.3, zorder=0)
+    pad = (max(xs.values()) - min(xs.values())) * 0.28
+    ax.set_xlim(min(xs.values()) - pad, max(xs.values()) + pad * 1.6)
+
+# The trees themselves are the strength the neural members have to reach.
+ax_l.axvline(solo["xgboost"], color="grey", ls="--", lw=1)
+ax_l.text(solo["xgboost"], FLOOR * 1.4, " xgboost", color="grey", fontsize=8.5,
+          rotation=90, va="bottom")
+plt.tight_layout()
+plt.show()
 
 # %% [markdown]
 # ### The result that replaces my theory

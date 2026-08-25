@@ -1,87 +1,124 @@
 # %% [markdown]
-# # TabFM on a saturated competition: what a 1.6B-parameter zero-shot tabular model can and cannot do
+# # TabFM zero-shot on 0.7% of the data
 #
-# In June 2026 Google Research released [TabFM](https://github.com/google-research/tabfm), a
-# pretrained foundation model for tabular data. It does no gradient training on your dataset. You
-# hand it labelled rows as **context**, it reads them in a single forward pass, and it predicts
-# your test rows. `fit()` does not fit anything; it encodes.
+# ## S6E8: what Google's 1.6-billion-parameter tabular foundation model can and cannot do
 #
-# That is a genuinely different bargain from a GBDT, and the obvious question is what it buys on a
-# real competition. This notebook answers that on Playground S6E8: 691,369 training rows, 296,302
-# test rows, ROC-AUC, and a leaderboard where 203 teams sit inside a 0.0002 band. A brutal place
-# to take a zero-shot model.
+# In June 2026 Google Research released [TabFM](https://github.com/google-research/tabfm): a
+# pretrained model for tabular data that does **no gradient training** on your dataset. You hand it
+# labelled rows as *context*, it reads them in one forward pass, and it predicts your test rows.
+# Calling `fit()` does not fit anything. It encodes.
 #
-# ### The answer, up front
+# I took it to Playground S6E8: 691,369 training rows, ROC-AUC, and a leaderboard where 203 teams
+# sit inside a 0.0002 band. Here is the whole result up front.
 #
-# Everything below is measured in this notebook. TabFM, reading a few thousand labelled rows as
-# context and doing **no gradient training at all**, on a 3,000-row holdout:
+# | | value |
+# |---|---|
+# | context rows that fit on a 16GB T4 | **8,000**, which is 1.4% of the 553,095 a GBDT gets per fold |
+# | xgboost, same twelve columns, all rows | 0.966113 |
+# | tabfm, 8,000-row context, 4 estimators, no training | **0.955027** |
+# | Spearman between them | 0.9732 |
+# | gain from adding tabfm to the blend | **+0.000050**, not distinguishable from zero |
 #
-# | context rows | estimators | ROC AUC | seconds per 3,000 predictions |
+# The AUC curve is **still climbing when memory runs out**. TabFM does not lose because it is a bad
+# model. It loses because 1.4% of the rows is the most you can give it, and on this dataset rows are
+# what the score is made of.
+#
+# ### Three things you can use even if you never run TabFM
+#
+# 1. **The package will not import on Kaggle**, and the fix is one word.
+#    `tabfm/__init__.py` probes the JAX backend inside `except ImportError`, but Kaggle's flax is
+#    older than the pinned 0.12.7 and raises `AttributeError`, which is not caught. So `import tabfm`
+#    fails even for PyTorch-only use. Widening both guards to `except Exception:` fixes it.
+# 2. **Query rows cost memory too.** Sizing the context is not enough. A 30,000-row `predict_proba`
+#    OOMs at a context size that is fine with 3,000 query rows, because attention over
+#    `[queries x context]` is materialised per batch.
+# 3. **The README contradicts the code.** The FAQ says `max_num_rows` defaults to 100 context rows.
+#    The code defaults it to `None`, meaning no cap, which on 553,095 rows is an instant OOM.
+#
+# If you just want members for your blend, [**S6E8 OOF Library: 11 Neural Members**](https://www.kaggle.com/datasets/paiky1995/s6e8-oof-library-11-members) (CC0)
+# has out-of-fold and test predictions for 11 neural models on a frozen fold split, ready to stack.
+#
+# ### And an architecture read straight out of the source
+#
+# Every structural claim below is read out of `tabfm/src/pytorch/model.py` and then **asserted
+# against the loaded module tree**, so the section is falsifiable rather than prose. The part worth
+# keeping: **rows are a permutation-invariant set** (induced-point attention, 256 inducing vectors,
+# no positional encoding) while **columns are a positional sequence** (RoPE). That asymmetry is why
+# long context is tractable, why context is cacheable, and why the built-in ensembling shuffles
+# *columns* rather than rows.
+#
+# ### Contents
+#
+# | | |
+# |---|---|
+# | [1. What a tabular FM is](#1.-What-a-tabular-foundation-model-is,-and-what-it-is-not) | mechanism, and what I am not claiming |
+# | [2. Installing it on Kaggle](#2.-Installing-TabFM-on-Kaggle,-and-a-bug-that-stops-it-importing) | **the import bug and the fix** |
+# | [3. How TabFM works](#3.-How-TabFM-works) | Fourier cell tokens, ICL in one line, rows-as-set |
+# | [4. The wall](#4.-The-wall:-how-much-context-actually-fits) | **the measured context curve, to OOM** |
+# | [5. Matched comparison](#5.-A-matched-comparison:-same-columns,-one-trained,-one-not) | same twelve columns, one trained, one not |
+# | [6. Does it earn a blend slot?](#6.-Does-TabFM-earn-a-place-in-a-blend?) | hill-climb, and a gain of +0.000050 |
+# | [7. When it is the right tool](#7.-When-a-tabular-foundation-model-is-the-right-tool) | the regime where it wins |
+# | [8. Limitations](#8.-Limitations,-and-things-I-could-not-settle) | including contamination |
+#
+# ---
+#
+# ### Why this notebook exists
+#
+# It is built to put my [previous notebook's](https://www.kaggle.com/code/paiky1995/s6e8-correlation-does-not-predict-contribution)
+# conclusion at risk rather than restate it. That one found that decorrelation only pays at
+# competitive strength. TabFM is the most decorrelated member obtainable, a different family with
+# zero gradient steps on 1.4% of the rows, and it is also 0.011 behind. So the earlier claim predicts
+# it contributes about nothing.
+#
+# | member | behind baseline | correlation with trees | gain |
 # |---|---|---|---|
-# | 250 | 1 | 0.914793 | 5.8 |
-# | 1,000 | 1 | 0.934674 | 6.8 |
-# | 4,000 | 1 | 0.944877 | 15.7 |
-# | 4,000 | 4 | 0.949890 | 60.4 |
-# | 8,000 | 1 | 0.950420 | 29.2 |
-# | 8,000 | 4 | **0.953135** | 116.2 |
-# | 16,000 | 1 | **out of memory** | tried to allocate 7.63 GiB |
+# | Lookup-Transformer | 0.000149 | 0.9658 | **+0.000577** |
+# | MLP on encoded features | 0.003422 | 0.9665 | +0.000013 |
+# | TabFM, zero-shot | 0.011086 | 0.9732 | +0.000050 |
 #
-# A 5-fold XGBoost given **exactly the same columns** and all 553,095 rows of each fold reaches
-# **0.965535** out-of-fold. A tuned XGBoost with target encoding and
-# engineered features reaches **0.968454** on these same folds, measured in my
-# [previous notebook](https://www.kaggle.com/code/paiky1995/lookup-transformer-auc-96-91).
+# Correlation barely moves across all three. The strength gap moves two orders of magnitude, and
+# contribution tracks strength. The prediction held.
 #
-# One caveat on that comparison before you draw conclusions from it: the TabFM figures above are on
-# a 3,000-row holdout and the XGBoost figures are out-of-fold over the full dataset, so they are not
-# strictly like-for-like. Section 6 puts both models on **identical rows** and that is the
-# comparison to trust.
+# For anyone who has spent years choosing fold schemes and early-stopping rules, no training at all
+# is a strange and appealing offer. The interesting question is not whether a zero-shot model beats a
+# tuned GBDT on 691,369 rows, because you can already guess that. It is **why it loses, by how much,
+# and what that exchange rate tells you about when to reach for one.**
 #
-# So TabFM loses by roughly 0.013 to 0.015 AUC. The reason is not that the model is weak. The reason
-# is arithmetic: a 16,000-row context tries to allocate 7.63 GiB on top of what is already resident
-# on a 16GB T4 and dies. The largest context that fits is 8,000 rows, which is **1.4% of the
-# training data a GBDT gets to see**, and the AUC curve is still climbing when the memory runs out.
+# ### The route
 #
-# The honest framing is therefore not "foundation models lose to GBDTs". It is:
+# > **Understand the mechanism** -> read the architecture out of the source -> find out how much
+# > data actually fits -> race it against a matched GBDT -> ask whether it earns a place in a
+# > blend -> work out when you would genuinely want it
 #
-# > TabFM reaches 0.9550 from 8,000 rows and zero gradient steps. XGBoost reaches 0.9661 from
-# > 553,095 rows and roughly 4,300 boosting rounds, on the same rows and the same columns. The
-# > interesting quantity is the exchange rate between context and training, and the curve above says
-# > it has not yet turned.
+# ### The rules I am playing by
 #
-# And on the question a competitor actually cares about: adding TabFM to that XGBoost is worth
-# **+0.000050 AUC**, a real but negligible amount, which section 6 unpacks. Being maximally
-# different is not enough when you are 0.011 behind.
+# 1. **The code is the authority, not the README.** Every architectural claim below is read out of
+#    `tabfm/src/pytorch/model.py`, and where a claim is checkable against the loaded model, the
+#    notebook checks it. You will see the README and the code disagree at least once.
+# 2. **One frozen split.** `StratifiedKFold(5, shuffle=True, random_state=42)` over the original row
+#    order, matching my previous notebook so the exported vectors stack across both.
+# 3. **Failures get reported, not hidden.** Out-of-memory errors are caught and printed rather than
+#    quietly skipped, because a hole in a scaling curve that nobody mentions is worse than a hole
+#    that is labelled.
+# 4. **Expensive work is justified before it runs.** One step in here costs multiple GPU-hours, and
+#    the notebook decides whether to pay by measuring first.
 #
-# ### What this notebook does
+# ### Two disclosures that belong before the science, not after
 #
-# 1. **A deep dive into how TabFM actually works**, read out of `pytorch/model.py` rather than
-#    paraphrased from the README. How a table cell becomes a token, the one line of code that
-#    implements in-context learning, and why rows and columns are treated as fundamentally
-#    different kinds of object.
-# 2. **The context scaling curve**, measured, including exactly where a 16GB GPU runs out.
-# 3. **A blend test that puts a prediction from my previous notebook at risk.** That notebook
-#    found that decorrelation only pays off at competitive strength. TabFM is about as
-#    decorrelated from a GBDT as anything could be, and 0.018 weaker. Those two facts point in
-#    opposite directions, so the blend either helps or it does not, and the answer is a real test
-#    of the earlier claim rather than a restatement of it.
-# 4. **Two upstream problems found while doing this**, including one that stops the package
-#    importing at all on Kaggle, with the one-line fix.
+# **The pretrained weights are not free for commercial use.** TabFM's *code* is Apache-2.0, but
+# `load()` downloads weights under a separate `tabfm-non-commercial-v1.0` licence restricted to
+# non-commercial, non-production use. A Kaggle notebook is fine. Shipping these weights in a product
+# is not. It is in the repository README and it is easy to miss.
 #
-# ### Honest disclosures before anything else
+# **There is no technical report.** The repository says so outright: no paper describing the
+# architecture, the training data, or the evaluation methodology. So I can tell you exactly what the
+# model *does*, because the source is public, and nothing at all about what it was trained on. On a
+# synthetic dataset that matters, and it cuts in the flattering direction: if data resembling this
+# generator was in the pretraining mix, the zero-shot numbers below are too good, not too bad.
 #
-# **The pretrained weights are not open for commercial use.** The TabFM *code* is Apache-2.0, but
-# `tabfm_v1_0_0.load()` downloads weights under a separate `tabfm-non-commercial-v1.0` licence
-# restricted to non-commercial, non-production use. A Kaggle Playground notebook is fine. Putting
-# these weights in a product is not. This is in the repository README and is easy to miss.
-#
-# **There is no technical report.** The repository states that no paper describing the
-# architecture, training data, or evaluation methodology is included. Everything architectural
-# below is read directly from the released source, and everything about *what it was trained on*
-# is simply unknown. That matters for a benchmark: I cannot rule out that data resembling this
-# dataset's generator was in its pretraining mix.
-#
-# **Accelerator:** this notebook needs **GPU T4 x2**. Kaggle's P100 is compute capability 6.0 and
-# the preinstalled PyTorch ships kernels for 7.0 and up, so TabFM cannot run on it at all.
+# **Accelerator:** this needs **GPU T4 x2**. Kaggle's P100 is compute capability 6.0 and the
+# preinstalled PyTorch ships kernels for 7.0 and up, so TabFM cannot run on it at all. Section 2
+# explains how I found that out the expensive way.
 
 # %% [markdown]
 # ## 1. What a tabular foundation model is, and what it is not
@@ -97,6 +134,19 @@
 # parameters. It enters the **input**, as context, at inference time. This is the same trick as
 # few-shot prompting an LLM, applied to rows of a table instead of tokens of text, and it is
 # usually called in-context learning.
+#
+# ### Put less formally
+#
+# A gradient-boosted tree is a student who read your textbook cover to cover. The exam is closed
+# book, and that is fine, because the textbook is now inside their head.
+#
+# TabFM is a brilliant consultant who has never seen your textbook and never will. You can hand them
+# a few pages at the moment you ask the question, and they are remarkably good at reasoning from
+# those pages. But they can only hold a few pages at a time, and your textbook is 691,369 pages long.
+#
+# Everything in this notebook follows from that image. The consultant is genuinely excellent. The
+# question is what a few pages are worth against a memorised textbook, and how many pages you can
+# physically get into their hands.
 #
 # Three consequences follow directly, and all three show up in the measurements later:
 #
@@ -252,7 +302,7 @@ log(f"setup took {time.time() - t0:.0f}s")
 # float32 even when the rest of the model is bfloat16, with a comment explaining that the
 # arguments reach magnitude ~30 and bf16 would destroy the phase.
 #
-# If you read my [previous notebook](https://www.kaggle.com/code/paiky1995/lookup-transformer-auc-96-91),
+# If you read my [previous notebook](https://www.kaggle.com/code/paiky1995/s6e8-correlation-does-not-predict-contribution),
 # this is the same periodic-embedding idea that made the Lookup-Transformer work, arrived at
 # independently by a much larger model. That is a mild but real piece of evidence that periodic
 # numeric embeddings are the right primitive for tabular deep learning, rather than a trick that
@@ -290,6 +340,23 @@ log(f"setup took {time.time() - t0:.0f}s")
 # hidden = self.mab1(ind, src, src, attn_mask=attn_mask)   # inducing points read the context
 # out = self.mab2(src, hidden, hidden)                      # every row reads the summary
 # ```
+#
+# ### The same idea, without the linear algebra
+#
+# Imagine 8,000 people in a hall who each need a sense of what the room collectively thinks. Letting
+# everyone talk to everyone is 64 million conversations. Instead, elect a fixed committee of 256
+# delegates. Every delegate listens to all 8,000 people, and then all 8,000 consult the delegates.
+# Two million conversations instead of 64 million, and the committee is a genuine summary of the
+# room.
+#
+# Three consequences fall straight out of that picture, and all three show up later:
+#
+# - **Cost grows with the room, not with the room squared.** That is what makes thousands of context
+#   rows possible at all.
+# - **The committee's summary does not depend on who asks.** So you can compute it once and reuse it
+#   for every test row, which is exactly the `cache_context=True` optimisation.
+# - **The committee is a bottleneck.** Everything your 8,000 labelled rows collectively know has to
+#   squeeze through 256 vectors. More context does not buy proportionally more information.
 #
 # That is induced set attention (the Set Transformer construction). Instead of `T x T` attention
 # between rows, a fixed number of learned **inducing vectors** attend over the rows, and then all
@@ -566,7 +633,7 @@ plt.show()
 # them.
 #
 # This is deliberately not the strongest possible GBDT. In my
-# [previous notebook](https://www.kaggle.com/code/paiky1995/lookup-transformer-auc-96-91) a tuned
+# [previous notebook](https://www.kaggle.com/code/paiky1995/s6e8-correlation-does-not-predict-contribution) a tuned
 # XGBoost with nested target encoding and engineered features reaches **0.968454** on these same
 # folds. That is the real ceiling to keep in mind; the matched model below is the fair like-for-like.
 
