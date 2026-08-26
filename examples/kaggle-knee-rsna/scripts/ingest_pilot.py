@@ -24,8 +24,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import _dbx  # noqa: E402
 
 JOB = r'''
-import concurrent.futures as cf, io, json, os, time
-import numpy as np, pandas as pd, pydicom, requests
+import concurrent.futures as cf, io, json, os, shutil, tempfile, time
+import numpy as np, pandas as pd, pydicom
 from PIL import Image
 
 WORK = os.environ["KNEE_WORK"]
@@ -33,6 +33,7 @@ COMP = "rsna-knee-abnormality-detection"
 N_STUDIES = int(os.environ["KNEE_N_STUDIES"])
 N_SLICES = int(os.environ["KNEE_N_SLICES"])
 SIZE = int(os.environ["KNEE_SIZE"])
+WORKERS = int(os.environ.get("KNEE_WORKERS", "6"))
 SCOPE = os.environ["KNEE_SCOPE"]
 USER = dbutils.secrets.get(SCOPE, "kaggle_username")
 KEY = dbutils.secrets.get(SCOPE, "kaggle_key")
@@ -59,20 +60,32 @@ for study, g in m.groupby("study"):
 studies = sorted(chosen)[:N_STUDIES]
 print(f"studies to ingest: {len(studies)}")
 
-sess = requests.Session()
-sess.auth = (USER, KEY)
-BASE = "https://www.kaggle.com/api/v1/competitions/data/download"
+# Use the kaggle package rather than a hand-built URL. The CLI talks to a generated
+# client, not a plain REST path, so every hand-rolled
+# /api/v1/competitions/data/download/<comp>/<nested/path> request returns 404. Measured:
+# 336 requests, 336 404s.
+SCRATCH = tempfile.mkdtemp(prefix="knee_")
+os.environ["KAGGLE_USERNAME"] = USER
+os.environ["KAGGLE_KEY"] = KEY
+os.environ["KAGGLE_CONFIG_DIR"] = SCRATCH
+print(f"scratch dir {SCRATCH}")
+from kaggle.api.kaggle_api_extended import KaggleApi
 
-def fetch(path):
+api = KaggleApi()
+api.authenticate()
+STATUS = {}
+
+def fetch_into(path, dest):
     for attempt in range(4):
         try:
-            r = sess.get(f"{BASE}/{COMP}/{path}", timeout=90)
-            if r.status_code == 200 and r.content[:32]:
-                return r.content
-        except Exception:
-            pass
-        time.sleep(2 ** attempt)
-    return None
+            api.competition_download_file(COMP, path, path=dest, force=True, quiet=True)
+            STATUS["ok"] = STATUS.get("ok", 0) + 1
+            return True
+        except Exception as e:
+            k = type(e).__name__
+            STATUS[k] = STATUS.get(k, 0) + 1
+            time.sleep(2 ** attempt)
+    return False
 
 TAGS = ["Manufacturer", "ManufacturerModelName", "MagneticFieldStrength", "Laterality",
         "SeriesDescription", "SliceThickness", "SpacingBetweenSlices", "RepetitionTime",
@@ -90,21 +103,27 @@ for study in studies:
         continue
     ser = chosen[study]
     paths = m[(m.study == study) & (m.series == ser)].path.tolist()
+    tmp = os.path.join(SCRATCH, study)
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp, exist_ok=True)
 
-    with cf.ThreadPoolExecutor(16) as ex:
-        blobs = list(ex.map(fetch, paths))
+    with cf.ThreadPoolExecutor(WORKERS) as ex:
+        list(ex.map(lambda pth: fetch_into(pth, tmp), paths))
 
     slices = []
-    for b in blobs:
-        if b is None:
-            continue
+    for f in sorted(os.listdir(tmp)):
         try:
-            d = pydicom.dcmread(io.BytesIO(b))
+            d = pydicom.dcmread(os.path.join(tmp, f))
             slices.append((d, float(getattr(d, "InstanceNumber", 0) or 0)))
         except Exception:
             continue
     if len(slices) < 8:
         failed.append(study)
+        print(f"study {study[-12:]} yielded {len(slices)} slices from {len(paths)} files; "
+              f"counts so far {STATUS}", flush=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+        if done == 0 and len(failed) >= 2:
+            raise SystemExit(f"first two studies both failed, stopping. counts {STATUS}")
         continue
 
     slices.sort(key=lambda t: t[1])
@@ -127,6 +146,7 @@ for study in studies:
         vol[j] = np.asarray(Image.fromarray((a * 255).astype(np.uint8))
                             .resize((SIZE, SIZE), Image.BILINEAR), dtype=np.float16) / 255.0
     np.save(out_npy, vol)
+    shutil.rmtree(tmp, ignore_errors=True)
     done += 1
     if done % 25 == 0:
         el = time.time() - t0
@@ -135,6 +155,7 @@ for study in studies:
 
 pd.DataFrame(headers).to_parquet(f"{WORK}/dicom_headers.parquet", index=False)
 print(f"\ningested {done} studies, {len(failed)} failed")
+print(f"download counts: {STATUS}")
 print(f"headers written for {len(headers)} studies")
 if headers:
     h = pd.DataFrame(headers)
@@ -156,6 +177,7 @@ def main() -> int:
     ap.add_argument("--confidence", default="/tmp/rsnarun/label_confidence.csv")
     ap.add_argument("--weak",
                     default="/tmp/rsnallm/flight0234_rsna-knee-hybrid-report-labels/report_labels_v4hybrid.csv")
+    ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--skip-upload", action="store_true")
     ap.add_argument("--timeout-min", type=int, default=240)
     args = ap.parse_args()
@@ -184,12 +206,13 @@ def main() -> int:
         f"os.environ['KNEE_N_STUDIES'] = {str(args.studies)!r}\n"
         f"os.environ['KNEE_N_SLICES'] = {str(args.slices)!r}\n"
         f"os.environ['KNEE_SIZE'] = {str(args.size)!r}\n"
-        f"os.environ['KNEE_SCOPE'] = {args.scope!r}\n" + JOB
+        f"os.environ['KNEE_SCOPE'] = {args.scope!r}\n"
+        f"os.environ['KNEE_WORKERS'] = {str(args.workers)!r}\n" + JOB
     )
 
     sub = _dbx.submit(
         wc, script, name="knee_ingest_pilot.py",
-        deps=["pydicom>=3.0", "pillow>=10.0", "requests>=2.31", "pyarrow>=15.0"],
+        deps=["pydicom>=3.0", "pillow>=10.0", "kaggle>=1.7", "pyarrow>=15.0"],
         timeout_min=args.timeout_min,
     )
     print(f"\nsubmitted run {sub['run_id']}")

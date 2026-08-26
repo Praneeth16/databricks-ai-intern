@@ -68,7 +68,6 @@ LABELS = ["ACL", "MCL", "Medial Meniscus", "Lateral Meniscus", "Medial OA", "Lat
 CANDIDATES = ["/kaggle/input/competitions/rsna-knee-abnormality-detection",
               "/kaggle/input/rsna-knee-abnormality-detection", "/tmp/rsnaknee"]
 ROOT = next(p for p in map(pathlib.Path, CANDIDATES) if (p / "train.csv").exists())
-SEARCH = [p for p in map(pathlib.Path, ["/kaggle/input", "/tmp/rsnallm"]) if p.exists()]
 
 train = pd.read_csv(ROOT / "train.csv")
 series = pd.read_csv(ROOT / "train_series.csv")
@@ -105,15 +104,20 @@ LABEL_SETS = {
     "yunus_4src":         ("yunusgmsoy/rsna-knee-llm-labels-4-source-merged", "report_labels_v5.csv"),
 }
 
-def find_file(name: str) -> pathlib.Path | None:
-    """Locate a dataset file without walking the competition tree.
+SEARCH = [p for p in map(pathlib.Path, ["/kaggle/input/datasets", "/kaggle/input",
+                                        "/tmp/rsnallm"]) if p.exists()]
 
-    A plain rglob over /kaggle/input descends into the competition mount, which holds
-    about 700,000 DICOM files, so it takes many minutes per lookup. Kaggle mounts each
-    dataset within a couple of levels, so bounded globs are both correct and fast.
+def find_file(name: str) -> pathlib.Path | None:
+    """Locate an attached dataset file without walking the competition tree.
+
+    This Kaggle image mounts competition data at /kaggle/input/competitions/<comp> and
+    attached datasets at /kaggle/input/datasets/<owner>/<slug>, so a dataset file sits
+    three levels below /kaggle/input. Older images used /kaggle/input/<slug>, so both
+    depths are tried. rglob is avoided on purpose, because it descends into the
+    competition mount and its ~700,000 DICOM files.
     """
     for root in SEARCH:
-        for pat in (name, f"*/{name}", f"*/*/{name}"):
+        for pat in (name, f"*/{name}", f"*/*/{name}", f"*/*/*/{name}"):
             for hit in root.glob(pat):
                 if "competitions" not in hit.parts:
                     return hit
@@ -137,6 +141,11 @@ for name, (slug, fname) in LABEL_SETS.items():
 
 print(pd.DataFrame(inventory).to_string(index=False))
 print(f"\nusable label sets: {len(sets)}")
+if not sets:
+    raise SystemExit(
+        "No label sets found. Attach the datasets listed above, and check where this\n"
+        f"image mounts them. Searched: {[str(p) for p in SEARCH]}\n"
+        f"Contents of /kaggle/input: {sorted(p.name for p in pathlib.Path('/kaggle/input').glob('*'))}")
 
 # %% [markdown]
 # <a id="s2"></a>

@@ -104,7 +104,7 @@ def find_root() -> pathlib.Path:
 def _bounded_find(root: pathlib.Path, name: str) -> pathlib.Path | None:
     """Bounded glob. An rglob under /kaggle/input walks the competition mount and its
     ~700,000 DICOM files, which costs minutes per lookup."""
-    for pat in (name, f"*/{name}", f"*/*/{name}"):
+    for pat in (name, f"*/{name}", f"*/*/{name}", f"*/*/*/{name}"):
         for hit in root.glob(pat):
             if "competitions" not in hit.parts:
                 return hit
@@ -556,7 +556,8 @@ def main() -> int:
 
     root = pathlib.Path(args.root) if args.root else find_root()
     roots = [pathlib.Path(p) for p in args.label_root] or [
-        pathlib.Path("/kaggle/input"), pathlib.Path("/tmp/rsnallm")
+        pathlib.Path("/kaggle/input/datasets"), pathlib.Path("/kaggle/input"),
+        pathlib.Path("/tmp/rsnallm"),
     ]
     roots = [p for p in roots if p.exists()]
 
