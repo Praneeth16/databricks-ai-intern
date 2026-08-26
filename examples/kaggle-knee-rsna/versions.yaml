@@ -1,0 +1,33 @@
+# One row per trained model. The trainer takes --version and looks it up here, so a
+# run is reproducible from this file plus the ingested arrays.
+#
+# label_file is the weak label set the model trains on. flight_hybrid scored highest
+# of the honest sets against the 58 annotated studies, at 0.899, but section 3 of the
+# notebook shows that ranking is inside the noise on 58 rows. It is chosen because it
+# is honest and complete, not because 0.899 beat 0.893.
+versions:
+  - version: v1_sagittal_r18
+    note: >
+      First baseline. ResNet18 over 16 sagittal slices as channels, trained with the
+      masked and weighted loss from the notebook. Deliberately small.
+    label_file: flight_hybrid_labels.csv
+    arch: resnet18
+    epochs: 12
+    bs: 16
+    lr: 0.0003
+    val_frac: 0.15
+    seed: 42
+
+  - version: v2_sagittal_r18_plain
+    note: >
+      Ablation for the notebook's central claim. Identical to v1 except every entry
+      is trained toward its weak label with weight 1, including the silent ones. If
+      masking is worth anything, v1 beats this on the annotated anchor.
+    label_file: flight_hybrid_labels.csv
+    arch: resnet18
+    epochs: 12
+    bs: 16
+    lr: 0.0003
+    val_frac: 0.15
+    seed: 42
+    disable_mask: true
