@@ -33,8 +33,9 @@ COMP = "rsna-knee-abnormality-detection"
 N_STUDIES = int(os.environ["KNEE_N_STUDIES"])
 N_SLICES = int(os.environ["KNEE_N_SLICES"])
 SIZE = int(os.environ["KNEE_SIZE"])
-USER = dbutils.widgets.get("KAGGLE_USERNAME")
-KEY = dbutils.widgets.get("KAGGLE_KEY")
+SCOPE = os.environ["KNEE_SCOPE"]
+USER = dbutils.secrets.get(SCOPE, "kaggle_username")
+KEY = dbutils.secrets.get(SCOPE, "kaggle_key")
 
 manifest = pd.read_csv(f"{WORK}/manifest.csv")
 series_meta = pd.read_csv(f"{WORK}/train_series.csv")
@@ -148,7 +149,7 @@ def main() -> int:
     ap.add_argument("--studies", type=int, default=700)
     ap.add_argument("--slices", type=int, default=16)
     ap.add_argument("--size", type=int, default=256)
-    ap.add_argument("--scope", default="kaggle")
+    ap.add_argument("--scope", default="ml-intern")
     ap.add_argument("--manifest", default="/tmp/rsnaknee/manifest.csv")
     ap.add_argument("--series", default="/tmp/rsnaknee/train_series.csv")
     ap.add_argument("--train", default="/tmp/rsnaknee/train.csv")
@@ -183,16 +184,13 @@ def main() -> int:
         f"os.environ['KNEE_N_STUDIES'] = {str(args.studies)!r}\n"
         f"os.environ['KNEE_N_SLICES'] = {str(args.slices)!r}\n"
         f"os.environ['KNEE_SIZE'] = {str(args.size)!r}\n"
-        f"dbutils.widgets.text('KAGGLE_USERNAME', '')\n"
-        f"dbutils.widgets.text('KAGGLE_KEY', '')\n" + JOB
+        f"os.environ['KNEE_SCOPE'] = {args.scope!r}\n" + JOB
     )
 
     sub = _dbx.submit(
         wc, script, name="knee_ingest_pilot.py",
         deps=["pydicom>=3.0", "pillow>=10.0", "requests>=2.31", "pyarrow>=15.0"],
         timeout_min=args.timeout_min,
-        secret_env={"KAGGLE_USERNAME": f"{args.scope}/username",
-                    "KAGGLE_KEY": f"{args.scope}/key"},
     )
     print(f"\nsubmitted run {sub['run_id']}")
     print(f"notebook     {sub['notebook_path']}")

@@ -105,9 +105,23 @@ LABEL_SETS = {
     "yunus_4src":         ("yunusgmsoy/rsna-knee-llm-labels-4-source-merged", "report_labels_v5.csv"),
 }
 
+def find_file(name: str) -> pathlib.Path | None:
+    """Locate a dataset file without walking the competition tree.
+
+    A plain rglob over /kaggle/input descends into the competition mount, which holds
+    about 700,000 DICOM files, so it takes many minutes per lookup. Kaggle mounts each
+    dataset within a couple of levels, so bounded globs are both correct and fast.
+    """
+    for root in SEARCH:
+        for pat in (name, f"*/{name}", f"*/*/{name}"):
+            for hit in root.glob(pat):
+                if "competitions" not in hit.parts:
+                    return hit
+    return None
+
 sets, inventory = {}, []
 for name, (slug, fname) in LABEL_SETS.items():
-    hit = next((h for root in SEARCH for h in root.rglob(fname)), None)
+    hit = find_file(fname)
     if hit is None:
         inventory.append({"label_set": name, "dataset": slug, "found": False, "studies": 0})
         continue
@@ -445,13 +459,12 @@ plt.tight_layout(); plt.show()
 
 # %%
 verdicts = None
-for root in SEARCH:
-    for hit in root.rglob("report_labels_v2.csv"):
-        d = pd.read_csv(hit).drop_duplicates("StudyInstanceUID").set_index("StudyInstanceUID")
-        cols = {c: c.replace("__verdict", "") for c in d.columns if c.endswith("__verdict")}
-        if len(cols) == len(LABELS):
-            verdicts = d[list(cols)].rename(columns=cols)[LABELS]
-            break
+_vh = find_file("report_labels_v2.csv")
+if _vh is not None:
+    d = pd.read_csv(_vh).drop_duplicates("StudyInstanceUID").set_index("StudyInstanceUID")
+    cols = {c: c.replace("__verdict", "") for c in d.columns if c.endswith("__verdict")}
+    if len(cols) == len(LABELS):
+        verdicts = d[list(cols)].rename(columns=cols)[LABELS]
 
 best = honest.iloc[0].label_set
 negatives = sets[best] > 0.5

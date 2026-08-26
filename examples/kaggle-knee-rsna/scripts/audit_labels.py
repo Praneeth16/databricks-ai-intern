@@ -101,15 +101,25 @@ def find_root() -> pathlib.Path:
     raise FileNotFoundError("train.csv not found in any known location")
 
 
+def _bounded_find(root: pathlib.Path, name: str) -> pathlib.Path | None:
+    """Bounded glob. An rglob under /kaggle/input walks the competition mount and its
+    ~700,000 DICOM files, which costs minutes per lookup."""
+    for pat in (name, f"*/{name}", f"*/*/{name}"):
+        for hit in root.glob(pat):
+            if "competitions" not in hit.parts:
+                return hit
+    return None
+
+
 def load_label_sets(roots: list[pathlib.Path]) -> dict[str, pd.DataFrame]:
     """Find each published label set under any of `roots`, keyed by our short name."""
     out: dict[str, pd.DataFrame] = {}
     for name, (_slug, fname) in LABEL_SETS.items():
         for root in roots:
-            hits = list(root.rglob(fname))
-            if not hits:
+            hit = _bounded_find(root, fname)
+            if hit is None:
                 continue
-            d = pd.read_csv(hits[0])
+            d = pd.read_csv(hit)
             if not all(c in d.columns for c in LABELS):
                 continue
             out[name] = (
@@ -319,11 +329,13 @@ def load_verdicts(label_roots: list[pathlib.Path]) -> pd.DataFrame | None:
     silent entries look like negatives.
     """
     for root in label_roots:
-        for hit in root.rglob("report_labels_v2.csv"):
-            d = pd.read_csv(hit).drop_duplicates("StudyInstanceUID").set_index("StudyInstanceUID")
-            cols = {c: c.replace("__verdict", "") for c in d.columns if c.endswith("__verdict")}
-            if len(cols) == len(LABELS):
-                return d[list(cols)].rename(columns=cols)[LABELS]
+        hit = _bounded_find(root, "report_labels_v2.csv")
+        if hit is None:
+            continue
+        d = pd.read_csv(hit).drop_duplicates("StudyInstanceUID").set_index("StudyInstanceUID")
+        cols = {c: c.replace("__verdict", "") for c in d.columns if c.endswith("__verdict")}
+        if len(cols) == len(LABELS):
+            return d[list(cols)].rename(columns=cols)[LABELS]
     return None
 
 
