@@ -538,6 +538,25 @@ def run_lookup_version(spec: dict, cv: dict, train: pd.DataFrame, y: np.ndarray,
         mapping[MISSING_LEVEL] = 0
         ids.append(s.map(mapping).to_numpy(dtype=np.int64))
         vocab.append(len(cats) + 1)
+    n_exact = len(ids)
+    # Multi-resolution quantile-bin token streams. A new *representation*, not more
+    # capacity: alongside each numeric column's exact-value token, add coarse-to-fine
+    # quantile-bin tokens (e.g. 64/256/1024). The exact-value table memorises the
+    # generator's value->label lookup but shares nothing across neighbouring values;
+    # the binned tokens expose the monotone/threshold structure the exact table cannot,
+    # at several granularities. Folded into the same embedding path with disjoint
+    # offsets, so a bin token in one (column, resolution) never shares a vector with
+    # another. Off (identical to the prior lookup) when `multires` is unset.
+    for r in [int(x) for x in (p.get("multires") or [])]:
+        for c in NUM:
+            v = both[c].to_numpy(dtype=np.float64)
+            obs = ~np.isnan(v)
+            codes = np.zeros(len(v), dtype=np.int64)  # local 0 == missing
+            if obs.sum() > r:
+                binned = pd.qcut(v[obs], q=r, labels=False, duplicates="drop")
+                codes[obs] = binned.astype(np.int64) + 1
+            ids.append(codes)
+            vocab.append(int(codes.max()) + 1)
     value_ids = np.stack(ids, axis=1)
     offsets = np.concatenate([[0], np.cumsum(vocab)[:-1]]).astype(np.int64)
     value_ids += offsets[None, :]
@@ -581,7 +600,15 @@ def run_lookup_version(spec: dict, cv: dict, train: pd.DataFrame, y: np.ndarray,
     })
     column_numeric, column_missing = rank_gauss(raw_numeric)
     derived_numeric, derived_missing = rank_gauss(derived)
-    n_columns, n_derived = len(FEATURE_COLS), derived.shape[1]
+    n_columns, n_derived = value_ids.shape[1], derived.shape[1]
+    # Multi-res bin columns have no smooth branch: pad the PLR inputs with masked-off
+    # columns so each carries its embedding token only (a pure lookup over its bins).
+    extra = n_columns - column_numeric.shape[1]
+    if extra > 0:
+        column_numeric = np.concatenate(
+            [column_numeric, np.zeros((len(both), extra), dtype=np.float32)], axis=1)
+        column_missing = np.concatenate(
+            [column_missing, np.ones((len(both), extra), dtype=np.float32)], axis=1)
     n_tokens = 1 + n_columns + n_derived
 
     t_ids = torch.from_numpy(value_ids)
