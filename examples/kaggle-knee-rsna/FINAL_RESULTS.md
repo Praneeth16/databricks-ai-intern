@@ -199,3 +199,109 @@ differ from the rest but not why.
 The notebook's language detector reads 26 Croatian reports as English. That pulls the
 Croatian agreement figure slightly toward the English one, so 0.706 for Croatian is a
 little optimistic.
+
+## The baseline model in the published notebook
+
+Measured by the Kaggle run of `notebooks/eda-baseline.src.py`, version 7, the version submitted,
+on one T4 with the internet off. Whole run about 850 seconds, of which about 670 seconds is
+reading DICOM files at 6.5 studies a second. All 4,407 studies were read and none failed to
+decode.
+
+One input per study is twelve slices at 224 by 224, taken at even spacing from the middle 80% of
+one sagittal fluid sensitive series, in medial to lateral order. The model is a ResNet18 with
+ImageNet weights, its first layer widened from three channels to twelve, and twelve outputs. The
+training target is the `flight0234/rsna-knee-hybrid-report-labels` set, which scores 0.899 on the
+58 annotated studies and does not contain them. Eight epochs, batch 32, one cycle schedule, no
+horizontal flip. Predictions are the rank average of the three epochs that scored best on the
+held out fifth, which were epochs 5, 6 and 7.
+
+| Measurement | Average AUC over twelve findings |
+|---|---|
+| Best single epoch, held out fifth (883 studies) | 0.771 |
+| Rank average of the best three epochs, same holdout | 0.777 |
+| Rank average against the radiologist, 58 studies, none trained on | 0.778 |
+| Public leaderboard, submission 55800687 | **0.798** |
+| Report labels against the radiologist, same 58 | 0.899 |
+
+The 58 study check predicted the leaderboard within 0.02. That is the useful result about the
+method rather than about the model. 58 studies cannot rank two models that are 0.02 apart, which
+is what section 3 of the notebook says, but they do tell you whether a model works at all, and
+here the estimate landed inside the interval. Top of the public board is about 0.952.
+
+Per finding, the submitted model against the radiologist on the 58: Baker's 0.871, Medial OA
+0.864, Effusion 0.857, Medial Meniscus 0.823, ACL 0.817, Contusion 0.785, PF OA 0.775, Synovitis
+0.761, Lateral OA 0.753, Lateral Meniscus 0.699, Fracture 0.681, MCL 0.644.
+
+Three things the runs established that are not about the score.
+
+Holding the 58 out of training is worth 0.066. An earlier version let 52 of the 58 into the
+training set, and the model then scored 0.859 against the radiologist instead of 0.793. Nothing
+warned about it, because the label the model trained on was the report label and the label it was
+scored against was the annotation, so the two never looked like the same number.
+
+A 58 study AUC moves about 0.03 between runs of the same recipe. Moving one study between the two
+sides of the split changed the mean from 0.793 to 0.763. That is the size the bootstrap in
+section 3 of the notebook predicts from the sample alone, so the notebook's own reruns confirm
+its own warning. The held out number moved 0.005 over the same change.
+
+The geometry rule for the knee's side works. `ImagePositionPatient` gives a side for 100% of
+studies against 42% that carry the `Laterality` tag, and the two agree on 95.9% of the 49
+studies in the sample that have both.
+
+## The word list written inside the notebook
+
+A clause level reader over nine languages, about 60 lines of patterns, scores 0.731 on the 58
+against 0.899 for a language model reading the same reports. Per language it is uneven in a way
+an overall coverage rate hides. Bulgarian looks fine at 97% of reports where something fires,
+but only the term for an effusion fires, at 95.5%, while the other eleven findings sit near
+zero. Turkish is the weakest overall at 59.7%, with 217 studies where nothing fires at all.
+
+## Model v2: reproduce raptor, fine-tune a second arm, blend
+
+The second model does not start from the 0.798 baseline. A public CC0 dataset
+(`dreaddevelopment/raptor-knee-widedense`) ships two CoaTNet checkpoints
+(`coatnet_rmlp_2_rw_384.sw_in12k_ft_in1k`, per-finding attention pooling head, 73.2M
+parameters) that score 0.924 on the public board as a single model, and the author's
+inference notebook is the exact pipeline. The strategy: port the pipeline, verify it
+against the 58 radiologist studies, fine-tune a second arm from the same checkpoint on
+the yunus v5 labels (different labels are the only diversity the arms get), and blend
+the two arms by weighted rank-mean. Split discipline: a 20% report-hash holdout (832
+studies) stays out of fine-tuning in both flag modes, and epoch choice plus blend weight
+come from it, never from the 58.
+
+Measured on the honest run (`INCLUDE_GOLD=False`, kernel version 7):
+
+- **The port reproduces their pipeline: 0.9128 mean AUC on the 58** — between the 0.9167
+  stored inside the checkpoint and the 0.9054 in their notebook comment for the same
+  file. Their blends added about +0.001 live, so a single-arm 0.924 LB is consistent
+  with a ~0.913 gate plus the usual gate-to-LB offset.
+- Arm 2 (three epochs over 3,522 studies, loss 0.4904 -> 0.4712, epoch 3 selected):
+  **0.9158 on the 58** (95% CI half-width 0.052) against arm 1's 0.9128 (0.051).
+- Holdout weak-label AUC: arm 1 0.9083, arm 2 0.9045. Arm 2 agrees less with v5; the
+  disagreement is the diversity doing its job.
+- Blend weight chosen on the holdout: **w\* = 0.35**, holdout weak 0.9097 (best of the
+  three, +0.0014 over the better arm). Blend against the radiologist, reported not
+  selected on: **0.9170**.
+- Per finding on the 58, arm 1: ACL 0.979, MCL 0.973, Medial Meniscus 0.960, Lateral
+  Meniscus 0.840, Medial OA 0.981, Lateral OA 0.843, PF OA 0.820, Effusion 0.984,
+  Synovitis 0.777, Baker's 0.971, Contusion 0.934, Fracture 0.892. Synovitis and PF OA
+  are the weak findings, as they were for the baseline.
+- End-to-end 3.7 hours on one T4 (decode 48 min, three fine-tune epochs 2.4 h, evals
+  about 30 min) inside the 9-hour session, with time guards that degrade to the
+  arm-1-only submission instead of timing out.
+
+Two defects found while porting:
+
+- Their `_pick_series_for_slot` calls `int(r.get('Fluid_Sensitive', 0) or 0)`. A NaN is
+  truthy, `int(nan)` raises, their per-study try/except swallows it, and the study is
+  scored 0.5 with no log line. This port treats NaN as no-preference and logs the
+  column's presence.
+- Submitting all 4,407 decode jobs as one list of futures retains every 7.2 MB decoded
+  stack inside its Future object: 31.8 GB of results, and the kernel is SIGKILLed at
+  study ~3,300 with no traceback. Bounded batches (`ex.map` over slices) keep the
+  in-flight footprint at 24 stacks.
+
+The submission run (`INCLUDE_GOLD=True`, kernel version 8) is the same notebook with
+the 58 radiologist studies and their 53 report twins admitted to fine-tuning. Its
+printed gold numbers are contaminated by design, the log carries the banner, and the
+blend weight still comes from the holdout.

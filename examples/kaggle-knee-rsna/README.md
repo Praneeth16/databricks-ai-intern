@@ -1,49 +1,106 @@
-# RSNA Knee Abnormality Detection: auditing the label supply chain
+# RSNA Knee Abnormality Detection
 
-Third Kaggle example in this repo. Unlike the two before it, the work here is not a
-leaderboard climb. The competition has a structural problem in how everyone builds
-training labels, and measuring that problem is worth more than another model.
+Third Kaggle example in this repo. Competition:
+[rsna-knee-abnormality-detection](https://www.kaggle.com/competitions/rsna-knee-abnormality-detection).
+Research track, $77,000, closes 2026-10-22, about 2,450 teams. The score is the mean of
+twelve ROC AUC values, one per finding.
 
-Competition: [rsna-knee-abnormality-detection](https://www.kaggle.com/competitions/rsna-knee-abnormality-detection).
-Research track, $77,000, closes 2026-10-22, 2,394 teams at the time of writing.
-The score is the mean of twelve ROC AUC values, one per finding.
+Three pieces of work live here.
 
-## The problem in one paragraph
+## 1. The published notebook
 
-There are 4,407 training studies and labels for 58 of them. Everyone else builds labels
-by reading the free-text radiology report that ships with each study. About a dozen of
-those report-derived label sets are now published as Kaggle Datasets, and people merge
-them into each other. Nobody had measured any of them. The test set has no report
-column, so text can only ever help you build training labels, never predict.
+[RSNA Knee: the data, then a simple baseline](https://www.kaggle.com/code/paiky1995/rsna-knee-the-data-then-a-simple-baseline)
 
-## What we measured
+One notebook that reads the data, explains it, trains one small image model, and writes a
+submission. Runs end to end on one T4 in about 15 minutes with the internet off. Source of
+truth is `notebooks/eda-baseline.src.py` in jupytext percent format. `notebooks/build.py`
+generates the `.ipynb` and asserts the two things that silently break a push, which are a
+title over 50 characters and a code cell that does not parse.
 
-| # | Finding |
+Twelve sections: the metric, the files, the 58 labelled studies, the reports, where the
+training labels come from, the DICOM headers, building one input per study, the model, what it
+learned, what it looks at, the submission, and what to try next.
+
+What it measures, all reproduced by the Kaggle run:
+
+| Fact | Value |
 |---|---|
-| 1 | Two published label sets score AUC 1.000 on all twelve findings against the 58 annotated studies. On those 58 rows every value is exactly 0.0 or 1.0, and on the other 4,349 rows not one value is. The annotations were written in. |
-| 2 | A 58 row AUC has a 95% interval about 0.23 wide, while the gap between the best and worst honest label set is 0.087. The 58 studies cannot rank label sets. |
-| 3 | Agreement between independent labelers needs no annotations, so it covers all 4,407 studies. It falls from 0.819 in English to 0.685 in Bulgarian. The labelers fail together, so merging sources does not rescue the hard languages. |
-| 4 | The reports are in nine languages, and two are not written in the Latin alphabet. A Latin alphabet keyword list fires on 99.8% of English reports and 0.9% of Bulgarian ones. |
-| 5 | A keyword list implies 27.7% of unmentioned findings are present. A language model allowed to answer "cannot tell" puts it at 8.2%. For Synovitis it is 34.1%, and Synovitis is the finding every label set scores worst on. |
-| 6 | The 58 annotated studies are not a fair sample. Their reports are longer, at 1,305 characters against 1,095 with p = 0.029, and 60.3% of them have an effusion. |
+| `Fluid_Sensitive` equals `Fat_Suppression` | on all 24,371 series rows, so the CSV carries one axis under two names |
+| 95% interval width of one finding's AUC on 58 studies | 0.19 to 0.32, against 0.07 for the mean over twelve |
+| Rank correlation, file name order against position along the stack | mean 0.043, so sorting a series by file name randomises the anatomy |
+| Studies where the header gives the knee's side | 100%, against 42% that carry the `Laterality` tag; the two agree on 95.9% of the studies that have both |
+| Word list written in the notebook, mean AUC on the 58 | 0.731 |
+| Published language model label set, mean AUC on the 58 | 0.899 |
+| Four sets merged, mean AUC on the 58 | 1.000, and it contains the 58 answers verbatim |
+| Reports not written in English | 59.8%, across nine languages and three alphabets |
 
-Finding 1 is not cheating. Writing real labels in where real labels exist is a sensible
-training choice. It only breaks when the same 58 studies are then used to measure a
+The label supply chain finding survives from the earlier version of this notebook, cut to the
+part that changes what a reader does. Writing real labels in where real labels exist is a
+sensible training choice. It only breaks when the same 58 studies are then used to measure a
 labeler or a model, which is the one thing they are otherwise for.
 
-Finding 5 corrects our own first measurement. A keyword list put silence at 27.7%, and
-using a better instrument dropped it to 8.2%. Most of what looked like a radiologist's
-silence was the keyword list failing to read the report. The residual is concentrated in
-Synovitis rather than spread evenly, and that is the useful part.
+`notebooks/label-supply-chain.src.py` is the previous version of the same published kernel,
+kept for reference. It is not built or pushed any more. Everything in it that changes what a
+reader does was carried into section 5 of the new notebook.
 
-## What shipped
+## 2. The audit script
 
-1. A public notebook, `notebooks/label-supply-chain.src.py`, built into
-   `label-supply-chain.ipynb`. Runs on CPU with the internet switched off.
-2. A CC0 Kaggle Dataset holding a label confidence table. One row per study and finding
-   for all 4,407 studies, with the cross-labeler agreement for that language and finding,
-   a weight, and a flag for entries to mask rather than set to zero.
-3. A minimal image model and submission, trained on Databricks serverless GPU.
+`scripts/audit_labels.py` measures every published weak-label set against the 58 annotated
+studies, with `--assert` to turn each finding into a check so an upstream dataset revision is
+noticed rather than silently changing the story. It needs no GPU, no pixels, and no Databricks.
+`FINAL_RESULTS.md` records what it found.
+
+```bash
+mkdir -p /tmp/rsnaknee && cd /tmp/rsnaknee
+for f in train.csv train_series.csv test.csv test_series.csv sample_submission.csv; do
+  kaggle competitions download -c rsna-knee-abnormality-detection -f "$f" -p . --force
+done
+
+mkdir -p /tmp/rsnallm && cd /tmp/rsnallm
+for d in pilkwang/rsna-knee-report-labels pilkwang/rsna-knee-llm-labels \
+         stevenleehans/rsna-knee-llm-report-labels lixin73/rsna-knee-llm-report-labels-sol56 \
+         flight0234/rsna-knee-hybrid-report-labels \
+         yunusgmsoy/rsna-knee-abnormality-3-source-merged-labels \
+         yunusgmsoy/rsna-knee-llm-labels-4-source-merged; do
+  kaggle datasets download -d "$d" -p "$(echo $d | tr '/' '_')" --unzip
+done
+
+uv run python scripts/audit_labels.py --root /tmp/rsnaknee --label-root /tmp/rsnallm --assert
+```
+
+## 3. Model v2: reproduce raptor, fine-tune a second arm, blend
+
+[RSNA Knee: reproduce raptor, then fine-tune on it](https://www.kaggle.com/code/paiky1995/rsna-knee-reproduce-raptor-then-fine-tune-on-it)
+
+One notebook that ports the public 0.924-LB raptor pipeline (CoaTNet-2, 64-slice stacks,
+CC0 checkpoints), verifies it against the 58 radiologist studies (0.9128 reproduced),
+fine-tunes a second arm from the same checkpoint on the yunus v5 labels, and blends the
+two arms by weighted rank-mean (w\* = 0.35 chosen on a report-hash holdout, never on the
+58; blend 0.9170 on the 58, reported not selected). Runs end to end on one T4 in about
+3.7 hours with the internet off, with time guards that degrade to the arm-1-only
+submission rather than time out. All numbers in `FINAL_RESULTS.md`.
+
+Source of truth is `notebooks/model-v2/model-v2.src.py`. Its own `build.py` adds two
+assertions on top of the shared ones: every call to a notebook-defined function must
+match its signature, positional and keyword — a trimmed helper signature is invisible to
+a name-binding check and costs one GPU re-run each time.
+
+Two-push protocol: push once with `INCLUDE_GOLD = False` (the honest measurement run,
+still a valid submission), then flip to `True` and push the final submission version
+(the 58 and their report twins go into fine-tuning; the printed gold numbers carry a
+contamination banner).
+
+## Building and pushing the notebook
+
+```bash
+cd notebooks && python build.py eda-baseline && kaggle kernels push -p .
+python scripts/kaggle_submit.py --dir notebooks/model-v2 --kernel --verify \
+  --timeout 14400 --expect submission.csv     # model-v2, both flag modes
+```
+
+Push with the current `id` in `kernel-metadata.json`. A title change renames the kernel in
+place and moves its slug, so the `id` has to be updated to the new slug before the next push
+or Kaggle answers 409.
 
 ## Layout
 
@@ -56,9 +113,12 @@ scripts/
   train.py                 2.5D baseline, one model per versions.yaml row
   kaggle_submit.py         builds, pushes, and verifies the notebook and dataset
 notebooks/
-  label-supply-chain.src.py   jupytext percent format, the single source of truth
+  eda-baseline.src.py         jupytext percent format, the single source of truth
+  label-supply-chain.src.py   the previous version of the same kernel, superseded
   build.py                    generates the .ipynb and asserts what silently breaks
   kernel-metadata.json
+  model-v2/                   raptor reproduction + fine-tune + blend (own build.py,
+                              model-v2.src.py, kernel-metadata.json)
 artifacts/                 submission, leaderboard snapshot, figures
 ```
 

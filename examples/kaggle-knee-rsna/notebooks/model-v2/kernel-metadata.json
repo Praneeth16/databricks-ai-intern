@@ -1,0 +1,20 @@
+{
+ "id": "paiky1995/rsna-knee-reproduce-raptor-then-fine-tune-on-it",
+ "title": "RSNA Knee: reproduce raptor, then fine-tune on it",
+ "code_file": "model-v2.ipynb",
+ "language": "python",
+ "kernel_type": "notebook",
+ "is_private": "false",
+ "enable_gpu": "true",
+ "enable_tpu": "false",
+ "enable_internet": "false",
+ "dataset_sources": [
+  "dreaddevelopment/raptor-knee-widedense",
+  "yunusgmsoy/rsna-knee-llm-labels-4-source-merged"
+ ],
+ "competition_sources": [
+  "rsna-knee-abnormality-detection"
+ ],
+ "kernel_sources": [],
+ "machine_shape": "NvidiaTeslaT4"
+}

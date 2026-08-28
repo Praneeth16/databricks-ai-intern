@@ -31,12 +31,12 @@ def slug_for(title: str) -> str:
     return re.sub(r"^-|-$", "", re.sub(r"[^a-z0-9]+", "-", title.lower()))
 
 
-def build() -> dict:
-    p = run([sys.executable, "build.py"], cwd=NB)
+def build(nb_dir: pathlib.Path) -> dict:
+    p = run([sys.executable, "build.py"], cwd=nb_dir)
     print(p.stdout or p.stderr)
     if p.returncode:
         raise SystemExit("build failed, nothing pushed")
-    return json.loads((NB / "kernel-metadata.json").read_text())
+    return json.loads((nb_dir / "kernel-metadata.json").read_text())
 
 
 def push_dataset(staging: pathlib.Path, public: bool) -> None:
@@ -61,8 +61,8 @@ def push_dataset(staging: pathlib.Path, public: bool) -> None:
     print(p.stdout or p.stderr)
 
 
-def push_kernel(meta: dict) -> str:
-    p = run(["kaggle", "kernels", "push", "-p", str(NB)])
+def push_kernel(meta: dict, nb_dir: pathlib.Path) -> str:
+    p = run(["kaggle", "kernels", "push", "-p", str(nb_dir)])
     print(p.stdout or p.stderr)
     if p.returncode:
         raise SystemExit("kernel push failed")
@@ -87,7 +87,7 @@ def wait_for_run(ref: str, timeout_s: int) -> str:
     return "TIMEOUT"
 
 
-def verify_output(ref: str, out_dir: pathlib.Path) -> None:
+def verify_output(ref: str, out_dir: pathlib.Path, expect: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     p = run(["kaggle", "kernels", "output", ref, "-p", str(out_dir)])
     print(p.stdout or p.stderr)
@@ -103,8 +103,8 @@ def verify_output(ref: str, out_dir: pathlib.Path) -> None:
     # One __results___files directory per figure cell is the evidence the plots rendered.
     figs = list(out_dir.rglob("__results___files/*"))
     print(f"rendered figure files: {len(figs)}")
-    if "label_confidence.csv" not in files:
-        print("WARNING: label_confidence.csv missing from the run output")
+    if expect not in files:
+        print(f"WARNING: {expect} missing from the run output")
 
 
 def main() -> int:
@@ -115,9 +115,18 @@ def main() -> int:
     ap.add_argument("--public", action="store_true")
     ap.add_argument("--verify", action="store_true", help="wait for the run and check it")
     ap.add_argument("--timeout", type=int, default=2400)
+    ap.add_argument("--dir", default=None,
+                    help="notebook directory under the example root, e.g. notebooks/model-v2; "
+                         "default is the top-level notebooks/ dir")
+    ap.add_argument("--expect", default="label_confidence.csv",
+                    help="output file the finished run must contain")
     args = ap.parse_args()
 
-    meta = build()
+    nb_dir = (HERE.parent / args.dir).resolve() if args.dir else NB
+    if not (nb_dir / "build.py").is_file():
+        raise SystemExit(f"no build.py in {nb_dir}")
+
+    meta = build(nb_dir)
     title = meta["title"]
     print(f"\ntitle       {title!r}  ({len(title)}/50 chars)")
     print(f"id          {meta['id']}")
@@ -126,13 +135,13 @@ def main() -> int:
     if args.dataset:
         push_dataset(pathlib.Path(args.staging), args.public)
     if args.kernel:
-        ref = push_kernel(meta)
+        ref = push_kernel(meta, nb_dir)
         if args.verify:
             state = wait_for_run(ref, args.timeout)
             print(f"\nrun state: {state}")
             if state != "COMPLETE":
                 raise SystemExit(f"run did not complete ({state})")
-            verify_output(ref, HERE.parent / "artifacts" / "kernel-output")
+            verify_output(ref, HERE.parent / "artifacts" / "kernel-output", args.expect)
     return 0
 
 
