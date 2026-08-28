@@ -1,20 +1,16 @@
 {
- "id": "paiky1995/rsna-knee-58-labels-9-languages-a-leak",
- "title": "🔍 RSNA Knee: 58 Labels, 9 Languages, a Leak",
- "code_file": "label-supply-chain.ipynb",
+ "id": "paiky1995/rsna-knee-the-data-then-a-simple-baseline",
+ "title": "RSNA Knee: the data, then a simple baseline",
+ "code_file": "eda-baseline.ipynb",
  "language": "python",
  "kernel_type": "notebook",
  "is_private": "false",
- "enable_gpu": "false",
+ "enable_gpu": "true",
  "enable_tpu": "false",
  "enable_internet": "false",
  "dataset_sources": [
-  "pilkwang/rsna-knee-report-labels",
-  "pilkwang/rsna-knee-llm-labels",
-  "stevenleehans/rsna-knee-llm-report-labels",
-  "lixin73/rsna-knee-llm-report-labels-sol56",
+  "pytorch/resnet18",
   "flight0234/rsna-knee-hybrid-report-labels",
-  "yunusgmsoy/rsna-knee-abnormality-3-source-merged-labels",
   "yunusgmsoy/rsna-knee-llm-labels-4-source-merged"
  ],
  "competition_sources": [
