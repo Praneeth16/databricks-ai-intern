@@ -357,7 +357,10 @@ else:
               if s not in set(gold_ids) and fold(reports.get(s, "")) not in gold_text]
 
 if INCLUDE_GOLD:
-    assert set(gold_ids) <= set(ft_ids), "gold-in mode but the 58 are not in fine-tuning"
+    # The report-hash holdout keeps its 6 gold studies in both modes, so gold-in means
+    # every non-holdout gold study, not all 58.
+    assert (set(gold_ids) - set(holdout_ids)) <= set(ft_ids), \
+        "gold-in mode but holdout-free gold is missing from fine-tuning"
 else:
     assert (set(ft_ids) & set(gold_ids)) == set(), "gold rows leaked into an honest fine-tune set"
 n_twins = len(ft_base) - len(ft_ids) if not INCLUDE_GOLD else \
