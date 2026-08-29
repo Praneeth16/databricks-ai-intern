@@ -305,3 +305,11 @@ The submission run (`INCLUDE_GOLD=True`, kernel version 8) is the same notebook 
 the 58 radiologist studies and their 53 report twins admitted to fine-tuning. Its
 printed gold numbers are contaminated by design, the log carries the banner, and the
 blend weight still comes from the holdout.
+
+The gold-in run completed clean (3.7 h): fine-tune set 3,575 studies (58 gold + 53 twins
+in), epoch 3 selected, w\* = 0.3, holdout weak 0.9092 — statistically identical to the
+honest run's 0.9097, so including the 52 non-holdout gold studies in training moved
+nothing measurable out-of-sample. Its arm-2 gold mean of 0.9403 is exactly the
+contamination the memory on weak-label inflation predicts (0.066 AUC is the measured
+inflation rate; 0.9403 - 0.9158 = 0.025 on a different split, same direction), and the
+log carries the banner. The final submission is this run's blend.
