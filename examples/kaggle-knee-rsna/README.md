@@ -76,7 +76,8 @@ One notebook that ports the public 0.924-LB raptor pipeline (CoaTNet-2, 64-slice
 CC0 checkpoints), verifies it against the 58 radiologist studies (0.9128 reproduced),
 fine-tunes a second arm from the same checkpoint on the yunus v5 labels, and blends the
 two arms by weighted rank-mean (w\* = 0.35 chosen on a report-hash holdout, never on the
-58; blend 0.9170 on the 58, reported not selected). Runs end to end on one T4 in about
+58; blend 0.9170 on the 58, reported not selected; **public leaderboard 0.926**, rank
+665 of 2,676). Runs end to end on one T4 in about
 3.7 hours with the internet off, with time guards that degrade to the arm-1-only
 submission rather than time out. All numbers in `FINAL_RESULTS.md`.
 
