@@ -301,7 +301,7 @@ Two defects found while porting:
   study ~3,300 with no traceback. Bounded batches (`ex.map` over slices) keep the
   in-flight footprint at 24 stacks.
 
-The submission run (`INCLUDE_GOLD=True`, kernel version 8) is the same notebook with
+The submission run (`INCLUDE_GOLD=True`, kernel version 11) is the same notebook with
 the 58 radiologist studies and their 53 report twins admitted to fine-tuning. Its
 printed gold numbers are contaminated by design, the log carries the banner, and the
 blend weight still comes from the holdout.
@@ -315,7 +315,7 @@ inflation rate; 0.9403 - 0.9158 = 0.025 on a different split, same direction), a
 log carries the banner. The final submission is this run's blend.
 
 Submitted 2026-08-29: **public leaderboard 0.926, rank 665 of 2,676** (submission
-55873703; top of board 0.952, median 0.897) — above raptor's own published 0.924 for the
-single model. The gate-to-LB offset held a third time: blend gate 0.9170 on the 58
+55873703, the gold-in kernel version 11 blend at w\* = 0.3; top of board 0.952, median
+0.897) — above raptor's own published 0.924 for the single model. The gate-to-LB offset held a third time: blend gate 0.9170 on the 58
 predicted a leaderboard score in the low 0.92s; it landed 0.009 above the gate, the same
 direction and half the size of the baseline's 0.778 → 0.798 offset.
