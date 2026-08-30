@@ -1,9 +1,11 @@
 # %% [markdown]
 # # 🦵 RSNA Knee: 0.926 LB, CoaTNet + fine-tune blend
 #
-# **0.926 on the public leaderboard** (top 25% of ~2,700 teams), one T4, internet off, about
-# 3.7 hours. This notebook ports the public **0.924** CoaTNet checkpoint, verifies it against
-# the 58 radiologist-read studies, fine-tunes a second arm from it, and blends the two.
+# **0.926 on the public leaderboard** (top 25% of ~2,700 teams, scored by the two-arm
+# version of this notebook), one T4, internet off, about 6.5 hours. This notebook ports the
+# public **0.924** CoaTNet checkpoint, verifies it against the 58 radiologist-read studies,
+# fine-tunes a second arm from it, adds the checkpoint's SWA twin as a third arm, and blends
+# all three under two-pass test-time augmentation.
 #
 # The checkpoint that made this worth doing: `dreaddevelopment/raptor-knee-widedense` (CC0) —
 # a CoAtNet trained on soft language-model labels of the reports, scoring **0.924 as a single
@@ -19,8 +21,11 @@
 #    annotations. A second arm trained on different labels is the one kind of diversity their
 #    own blending did not have; their arms shared labels and architecture, and blending bought
 #    them about +0.001 on the live board. Expect a small gain here too, not a second 0.92.
-# 3. **🧪 Blend and submit.** Weighted rank-mean of the two arms, the weight picked on a
+# 3. **🧪 Blend and submit.** Weighted rank-mean of the arms, the weights picked on a
 #    held-out fifth of the studies and never on the 58.
+# 4. **🧬 Go further.** Eight fine-tune epochs (the 0.926 version stopped at three while the
+#    gate was still climbing), the dataset's SWA checkpoint as a third arm, and a second
+#    center-shifted pass over the test set — each change measurable against what scored 0.926.
 #
 # Two honesty rules, both inherited from the first notebook. The v5 label set contains the answers
 # for the 58 labelled studies, so whether those 58 may be used to *measure* depends entirely on
@@ -30,7 +35,7 @@
 # recipe, so these numbers validate that a model works; they do not rank models that are close.
 #
 # Everything runs in this notebook on one T4 with the internet off: reading all 4,407 training
-# studies, arm-1 inference, fine-tuning, blending, and writing the submission. About 3.7 hours.
+# studies, arm-1 inference, fine-tuning, blending, and writing the submission. About 6.5 hours.
 
 # %%
 import os
@@ -75,11 +80,11 @@ FINAL_WRITE_BY = HARD_DEADLINE - 0.25 * 3600
 # fine-tuning, so every number against them is a measurement. True: they go in (their v5 labels
 # are the exact annotations), the run is the submission run, and the 58-study number printed is
 # contaminated by construction. Two pushes: first False to measure, then True to submit.
-INCLUDE_GOLD = True
+INCLUDE_GOLD = False
 
 HOLDOUT_FRAC = 0.20                 # report-hash holdout, excluded from fine-tune in BOTH modes
 W_WINDOWS = 12                      # windows sampled per study per epoch
-EPOCHS_FT = 3
+EPOCHS_FT = 8                       # v2 stopped at 3 while the holdout gate was still climbing
 ACCUM = 4                           # studies per optimizer step
 LR_FT = 1e-5
 WD_FT = 1e-4
@@ -88,6 +93,7 @@ SEED = 0
 READ_THREADS = 12
 K_EVAL = 42                         # windows per study at inference, raptor's scored setting
 K_GATE = 12                         # cheaper windows for the per-epoch gate
+TTA_TEST = 2                        # test-set passes per arm, center-shifted; gold/holdout stay 1
 
 TIMINGS = {}
 
@@ -471,7 +477,7 @@ def load_model(pt_path, device):
     model.eval().to(device)
     return model, int(ck.get("res", 384)), ck
 
-def _eval_centers(mask, D, k):
+def _eval_centers(mask, D, k, shift=0):
     valid = np.where(mask > 0)[0]
     if len(valid) < 3:
         valid = np.arange(min(3, D))
@@ -480,11 +486,13 @@ def _eval_centers(mask, D, k):
     if not cs:
         cs = [max(1, min((lo + hi) // 2, D - 2))]
     idx = np.linspace(0, len(cs) - 1, k).round().astype(int)
+    if shift:
+        idx = np.clip(idx + shift, 0, len(cs) - 1)
     return [cs[i] for i in idx]
 
-def eval_windows(vol, mask, k, res, norm=NORM):
+def eval_windows(vol, mask, k, res, norm=NORM, shift=0):
     D = vol.shape[0]
-    cs = _eval_centers(mask, D, k)
+    cs = _eval_centers(mask, D, k, shift=shift)
     wins = np.empty((len(cs), 3, res, res), np.float32)
     for j, c in enumerate(cs):
         c = max(1, min(c, D - 2))
@@ -515,9 +523,9 @@ def infer_probs(model, xwins, device):
     o = torch.sigmoid(model(x).float())
     return o[0].cpu().numpy()
 
-def infer_study(model, sid, k):
+def infer_study(model, sid, k, shift=0):
     vol, mask = get_stack(sid)
-    return infer_probs(model, eval_windows(vol, mask, k=k, res=RES), dev)
+    return infer_probs(model, eval_windows(vol, mask, k=k, res=RES, shift=shift), dev)
 
 def infer_guarded(model, ids, k, deadline, tag):
     """Evaluate studies one at a time, stopping if the projection crosses the deadline.
@@ -687,6 +695,7 @@ def find_test_root():
     raise RuntimeError("no test root under /kaggle/input")
 
 CKPT_FILE = "raptor_ft_coatnet_v4_full.pt"
+CKPT_FILE_SWA = "raptor_ft_coatnet_v4_full_swa.pt"   # the dataset's second checkpoint: arm 3
 
 def find_weight_file(fname):
     direct = [f"/kaggle/input/raptor-knee-widedense/{fname}",
@@ -956,6 +965,33 @@ arm1_ho_weak = mean_auc(Y_ho_bin, P1_ho) if ho_ids else np.nan
 log(f"arm 1 on the holdout: {len(ho_ids)} studies, weak-label mean AUC {arm1_ho_weak:.4f} "
     f"({TIMINGS['arm1_holdout_s']:.0f}s)")
 np.savez_compressed("/kaggle/tmp/arm1_holdout.npz", ids=np.array(ho_ids), probs=P1_ho)
+
+# %% [markdown]
+# ## 🔁 Arm 1 on the test set, second pass (TTA)
+#
+# Test-time augmentation, kept cheap: the eval windows are evenly spaced over a study's valid
+# range, so a second pass with every center shifted one slice is a genuinely different view of
+# the same study, and averaging the two passes is the standard free lunch. Test only — the
+# holdout and the 58 stay single-pass so every selection number stays comparable to v2, and
+# the pass runs now because arm 1 is freed for the fine-tune right after this.
+
+# %%
+arm1_test_b = None
+if TTA_TEST > 1 and test_ids and \
+        time.time() + len(test_ids) * float(np.median(test_times or [1.7])) < FT_END_BY - 1.2 * 3600:
+    t_b = time.time()
+    arm1_test_b = np.full((len(test_ids), len(LABELS)), 0.5, np.float32)
+    for i, s in enumerate(test_ids):
+        try:
+            arm1_test_b[i] = infer_study(arm1, s, K_EVAL, shift=1)
+        except Exception as e:
+            log(f"  study {i} {short_uid(s)} FALLBACK ({type(e).__name__}: {e})")
+        if (i + 1) % 100 == 0 or i + 1 == len(test_ids):
+            log(f"arm-1 test pass 2: {i + 1}/{len(test_ids)}")
+    TIMINGS["arm1_test_tta_s"] = round(time.time() - t_b, 1)
+    log(f"arm-1 TTA pass done ({TIMINGS['arm1_test_tta_s']:.0f}s)")
+else:
+    log("arm-1 TTA pass skipped: TTA_TEST=1, or the clock belongs to the fine-tune")
 
 # %% [markdown]
 # ## 🎯 Fine-tune arm 2 from the checkpoint
@@ -1242,6 +1278,166 @@ else:
     log("rung 2 skipped: no fine-tuned arm or too late; rung 1 stands")
 
 # %% [markdown]
+# ## 🔁 Arm 2 on the test set, second pass (TTA)
+#
+# Same shifted-center second pass as arm 1 got, while arm 2 is still resident.
+
+# %%
+arm2_test_b = None
+if ran_rung2 and TTA_TEST > 1 and test_ids:
+    per_study_b = float(np.median(test_times)) if test_times else 1.7
+    if time.time() + len(test_ids) * per_study_b * 1.5 + 300 < FINAL_WRITE_BY - 3600:
+        t_b2 = time.time()
+        arm2_test_b = np.full((len(test_ids), len(LABELS)), 0.5, np.float32)
+        for i, s in enumerate(test_ids):
+            try:
+                arm2_test_b[i] = infer_study(arm2, s, K_EVAL, shift=1)
+            except Exception as e:
+                log(f"  study {i} {short_uid(s)} FALLBACK ({type(e).__name__}: {e})")
+            if (i + 1) % 100 == 0 or i + 1 == len(test_ids):
+                log(f"arm-2 test pass 2: {i + 1}/{len(test_ids)}")
+        TIMINGS["arm2_test_tta_s"] = round(time.time() - t_b2, 1)
+        log(f"arm-2 TTA pass done ({TIMINGS['arm2_test_tta_s']:.0f}s)")
+    else:
+        log("arm-2 TTA pass skipped: the projection crosses the arm-3 window")
+else:
+    log("arm-2 TTA pass skipped: rung 2 did not run, or TTA_TEST=1")
+
+# %% [markdown]
+# ## 🧬 Arm 3: the SWA checkpoint
+#
+# The dataset ships a second checkpoint, `raptor_ft_coatnet_v4_full_swa.pt` — stochastic
+# weight averaging over the same training run. Same architecture, same label family, a
+# different point in weight space: the cheapest diversity there is. It gets no fine-tuning;
+# it is a third opinion, measured exactly like the other two.
+
+# %%
+P3_ho = P3_gold = None
+arm3_ho_weak = arm3_gold_mean = np.nan
+weight_path_swa = find_weight_file(CKPT_FILE_SWA)
+arm3, RES3, ck3 = load_model(weight_path_swa, dev)
+assert RES3 == RES, f"SWA checkpoint res {RES3} != {RES}"
+if "lab" in ck3:
+    assert list(ck3["lab"]) == LABELS, "SWA checkpoint label order differs"
+log(f"arm 3 (SWA) loaded: stored gold_auc {ck3.get('gold_auc')}, epoch {ck3.get('epoch')}")
+if ho_ids and time.time() < EVAL_END_BY:
+    t_a3 = time.time()
+    used3, P3_ho = infer_guarded(arm3, ho_ids, K_EVAL, EVAL_END_BY, "arm-3 holdout")
+    if len(used3) < len(ho_ids):          # keep every arm and Y row-aligned for the blend
+        ho_ids = used3
+        P1_ho = P1_ho[:len(ho_ids)]
+        if P2_ho is not None:
+            P2_ho = P2_ho[:len(ho_ids)]
+        Y_ho_bin = Y_ho_bin[:len(ho_ids)]
+    arm3_ho_weak = mean_auc(Y_ho_bin, P3_ho) if ho_ids else np.nan
+    log(f"arm 3 on the holdout: weak-label mean AUC {arm3_ho_weak:.4f} "
+        f"({time.time() - t_a3:.0f}s)")
+    est_gold3 = len(gold_ids) * TIMINGS.get("s_per_study_eval", 12.0)
+    if time.time() + est_gold3 < EVAL_END_BY:
+        P3_gold = np.stack([infer_study(arm3, s, K_EVAL) for s in gold_ids])
+        auc3_gold = score_against_gold(pd.DataFrame(P3_gold, index=gold_ids, columns=LABELS))
+        arm3_gold_mean = float(auc3_gold.mean())
+        log(f"arm-3 gold mean {arm3_gold_mean:.4f}")
+    else:
+        log("arm-3 gold eval skipped: projection past the eval budget")
+else:
+    log("arm 3 evals skipped: no decoded holdout, or the eval budget is spent")
+
+# %% [markdown]
+# ## 🤝 The three-way blend, weights chosen on the holdout
+#
+# A simplex grid over (arm 1, arm 2, arm 3) in steps of 0.1, scored on the same holdout rows
+# the two-way weight came from. An arm with no holdout scores is forced to weight zero, so
+# the grid degrades to the two-way or one-way case instead of failing.
+
+# %%
+W3 = (1.0, 0.0, 0.0)
+blend3_ho_weak = np.nan
+if ho_ids and (P2_ho is not None or P3_ho is not None):
+    R1 = rankpct(np.clip(P1_ho, 0, 1))
+    R2 = rankpct(np.clip(P2_ho, 0, 1)) if P2_ho is not None else None
+    R3 = rankpct(np.clip(P3_ho, 0, 1)) if P3_ho is not None else None
+    grid = []
+    for w2i in range(0, 11):
+        for w3i in range(0, 11 - w2i):
+            w2, w3 = w2i / 10.0, w3i / 10.0
+            if (R2 is None and w2 > 0) or (R3 is None and w3 > 0):
+                continue
+            w1 = round(1.0 - w2 - w3, 1)
+            mix = w1 * R1 + (w2 * R2 if R2 is not None else 0.0) + \
+                  (w3 * R3 if R3 is not None else 0.0)
+            grid.append(((w1, w2, w3), mean_auc(Y_ho_bin, mix)))
+    W3, blend3_ho_weak = max(grid, key=lambda t: t[1])
+    g_lo = min(g[1] for g in grid) - 0.005
+    g_hi = max(g[1] for g in grid) + 0.005
+    top5 = sorted(grid, key=lambda t: -t[1])[:5]
+    show(pd.DataFrame({"w (arm 1)": [t[0][0] for t in top5],
+                       "w (arm 2)": [t[0][1] for t in top5],
+                       "w (arm 3)": [t[0][2] for t in top5],
+                       "holdout weak AUC": [round(t[1], 4) for t in top5]}),
+         f"Best three-way blends on the holdout — w* = {W3}, weak AUC {blend3_ho_weak:.4f}",
+         bars=["holdout weak AUC"], vmin=g_lo, vmax=g_hi)
+    log(f"3-way blend: w*={W3} holdout weak AUC {blend3_ho_weak:.4f} "
+        f"(two-way was {blend_ho_weak:.4f}, arm 1 alone {scores[0] if np.isfinite(blend_ho_weak) else arm1_ho_weak:.4f})")
+else:
+    log("3-way blend skipped: no second arm has holdout scores; W3 stays (1, 0, 0)")
+
+# %% [markdown]
+# ## 🏆 Rung 3: the three-arm submission
+#
+# All-or-nothing, same rule as rung 2: arm 3 predicts the test set (two center-shifted
+# passes when TTA_TEST allows), the three arms blend at the holdout-chosen weights, and if
+# the projection does not fit before the final-write deadline, submission.csv is not
+# touched and rung 2 stands.
+
+# %%
+ran_rung3 = False
+if ho_ids and P3_ho is not None and time.time() < TEST_START_BY:
+    per_study3 = float(np.median(test_times)) if test_times else 1.7
+    projected3 = time.time() + len(test_ids) * per_study3 * TTA_TEST * 1.5 + 300
+    if projected3 < FINAL_WRITE_BY:
+        t_r3 = time.time()
+        arm3_test = np.full((len(test_ids), len(LABELS)), 0.5, np.float32)
+        for i, s in enumerate(test_ids):
+            try:
+                arm3_test[i] = infer_study(arm3, s, K_EVAL)
+            except Exception as e:
+                log(f"  study {i} {short_uid(s)} FALLBACK ({type(e).__name__}: {e})")
+            if (i + 1) % 100 == 0 or i + 1 == len(test_ids):
+                log(f"arm-3 test: {i + 1}/{len(test_ids)}")
+        arm3_test_b = None
+        if TTA_TEST > 1 and time.time() + len(test_ids) * per_study3 * 1.5 + 300 < FINAL_WRITE_BY:
+            arm3_test_b = np.full((len(test_ids), len(LABELS)), 0.5, np.float32)
+            for i, s in enumerate(test_ids):
+                try:
+                    arm3_test_b[i] = infer_study(arm3, s, K_EVAL, shift=1)
+                except Exception as e:
+                    log(f"  study {i} {short_uid(s)} FALLBACK ({type(e).__name__}: {e})")
+                if (i + 1) % 100 == 0 or i + 1 == len(test_ids):
+                    log(f"arm-3 test pass 2: {i + 1}/{len(test_ids)}")
+        del arm3; gc.collect()
+        if dev == "cuda":
+            torch.cuda.empty_cache()
+        r1 = rankpct(np.clip(arm1_test if arm1_test_b is None else (arm1_test + arm1_test_b) / 2, 0, 1))
+        r2 = rankpct(np.clip(arm2_test if arm2_test_b is None else (arm2_test + arm2_test_b) / 2, 0, 1)) \
+            if ran_rung2 else None
+        r3 = rankpct(np.clip(arm3_test if arm3_test_b is None else (arm3_test + arm3_test_b) / 2, 0, 1))
+        w1, w2, w3 = W3
+        w_sum = w1 + (w2 if r2 is not None else 0.0) + w3
+        ranks3 = (w1 * r1 + (w2 * r2 if r2 is not None else 0.0) + w3 * r3) / w_sum
+        sub3 = write_submission(pd.DataFrame(ranks3, index=test_ids, columns=LABELS))
+        assert np.isfinite(sub3[LABELS].values).all(), "non-finite value in the 3-way submission"
+        TIMINGS["rung3_s"] = round(time.time() - t_r3, 1)
+        ran_rung3 = True
+        log(f"RUNG 3 written: 3-way blend w={W3}, TTA passes={TTA_TEST} "
+            f"({TIMINGS['rung3_s']:.0f}s)")
+    else:
+        log(f"rung 3 skipped: projected finish {projected3 - T0:.0f}s is past the "
+            f"final-write deadline; rung 2 stands")
+else:
+    log("rung 3 skipped: no arm-3 scores or too late; rung 2 stands")
+
+# %% [markdown]
 # ## 🖼️ What one study looks like to the model
 
 # %%
@@ -1300,7 +1496,13 @@ MEAS = {
     "arm2_holdout_weak": None if not np.isfinite(arm2_ho_weak) else round(arm2_ho_weak, 4),
     "blend_w": W_BLEND,
     "blend_holdout_weak": None if not np.isfinite(blend_ho_weak) else round(blend_ho_weak, 4),
-    "rung_written": 2 if ran_rung2 else 1,
+    "arm3_swa_file": CKPT_FILE_SWA,
+    "arm3_gold_mean": None if not np.isfinite(arm3_gold_mean) else round(arm3_gold_mean, 4),
+    "arm3_holdout_weak": None if not np.isfinite(arm3_ho_weak) else round(arm3_ho_weak, 4),
+    "blend3_w": W3,
+    "blend3_holdout_weak": None if not np.isfinite(blend3_ho_weak) else round(blend3_ho_weak, 4),
+    "tta_test_passes": TTA_TEST,
+    "rung_written": 3 if ran_rung3 else (2 if ran_rung2 else 1),
     "per_finding_arm1_gold": {c: round(float(v), 4) for c, v in auc1_gold.items()},
     "timings": TIMINGS,
     "seed": SEED,
@@ -1312,8 +1514,11 @@ facts([("run type", "submission (gold in fine-tune)" if INCLUDE_GOLD else "measu
        ("fine-tune epochs", len(history)),
        ("arm 1 gold mean", round(float(auc1_gold.mean()), 4)),
        ("arm 2 gold mean", None if not np.isfinite(arm2_gold_mean) else round(arm2_gold_mean, 4)),
-       ("blend weight", W_BLEND),
-       ("submission rung", "2 (blend)" if ran_rung2 else "1 (arm 1 only)")],
+       ("arm 3 gold mean (SWA)", None if not np.isfinite(arm3_gold_mean) else round(arm3_gold_mean, 4)),
+       ("blend weight (2-way)", W_BLEND),
+       ("blend weights (3-way)", W3),
+       ("submission rung",
+        "3 (three-arm blend)" if ran_rung3 else ("2 (blend)" if ran_rung2 else "1 (arm 1 only)"))],
       "This run")
 log("MEASUREMENT_JSON " + json.dumps(MEAS, separators=(",", ":"), default=str))
 log(f"submission.csv ready: {len(sub_final)} rows x {len(sub_final.columns)} cols")
@@ -1324,7 +1529,9 @@ log(f"submission.csv ready: {len(sub_final)} rows x {len(sub_final.columns)} col
 # %%
 phases = [("pass1_read_s", "pass 1: decode every study"), ("arm1_gold_s", "arm 1 on the 58"),
           ("arm1_holdout_s", "arm 1 on the holdout"), ("finetune_s", "fine-tune arm 2"),
-          ("rung1_s", "rung 1: arm 1 on test"), ("rung2_s", "rung 2: blend on test")]
+          ("rung1_s", "rung 1: arm 1 on test"), ("arm1_test_tta_s", "arm 1 test, TTA pass 2"),
+          ("rung2_s", "rung 2: blend on test"), ("arm2_test_tta_s", "arm 2 test, TTA pass 2"),
+          ("rung3_s", "rung 3: three-arm test + blend")]
 timed = [(nm, TIMINGS[k] / 60.0) for k, nm in phases if k in TIMINGS]
 if timed:
     fig, ax = plt.subplots(figsize=(8, 3.2))
