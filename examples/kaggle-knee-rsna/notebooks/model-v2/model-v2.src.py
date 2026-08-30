@@ -1,22 +1,26 @@
 # %% [markdown]
-# # RSNA Knee: reproduce raptor, then fine-tune on it
+# # 🦵 RSNA Knee: 0.926 LB, CoaTNet + fine-tune blend
 #
-# Our first notebook trained a small ResNet18 and scored 0.798 on the public leaderboard. Since
-# then a public checkpoint appeared that changes what is worth doing: a CoAtNet trained on soft
-# language-model labels of the reports, published under CC0 by `dreaddevelopment`, scoring
-# **0.924 as a single model** on the public leaderboard. Its weights and its full inference
-# notebook are public. This notebook does three things with that.
+# **0.926 on the public leaderboard** (top 25% of ~2,700 teams), one T4, internet off, about
+# 3.7 hours. This notebook ports the public **0.924** CoaTNet checkpoint, verifies it against
+# the 58 radiologist-read studies, fine-tunes a second arm from it, and blends the two.
 #
-# 1. **Reproduce it.** Port their preprocessing and head exactly, load their checkpoint, score it
-#    on the 58 studies that carry radiologist labels, and compare against the two numbers they
-#    published for it (0.9167 stored in the checkpoint, 0.9054 in their notebook's comments).
-# 2. **Fine-tune it.** Continue training from their checkpoint on a different label set,
+# The checkpoint that made this worth doing: `dreaddevelopment/raptor-knee-widedense` (CC0) —
+# a CoAtNet trained on soft language-model labels of the reports, scoring **0.924 as a single
+# model** on the public leaderboard, weights and inference notebook fully public. Our first
+# notebook trained a small ResNet18 and scored 0.798, so three things happen here with it.
+#
+# 1. **🔍 Reproduce it.** Port their preprocessing and head exactly, load their checkpoint,
+#    score it on the 58 studies that carry radiologist labels, and compare against the two
+#    numbers they published for it (0.9167 stored in the checkpoint, 0.9054 in their notebook's
+#    comments). We land between them.
+# 2. **🎯 Fine-tune it.** Continue training from their checkpoint on a different label set,
 #    `yunusgmsoy report_labels_v5`, which is a four-source merge that contains the 58 real
-#    annotations. A second arm trained on different labels is the one kind of diversity their own
-#    blending did not have; their arms shared labels and architecture, and blending bought them
-#    about +0.001 on the live board. Expect a small gain here too, not a second 0.92.
-# 3. **Blend and submit.** Weighted rank-mean of the two arms, the weight picked on a held-out
-#    fifth of the studies and never on the 58.
+#    annotations. A second arm trained on different labels is the one kind of diversity their
+#    own blending did not have; their arms shared labels and architecture, and blending bought
+#    them about +0.001 on the live board. Expect a small gain here too, not a second 0.92.
+# 3. **🧪 Blend and submit.** Weighted rank-mean of the two arms, the weight picked on a
+#    held-out fifth of the studies and never on the 58.
 #
 # Two honesty rules, both inherited from the first notebook. The v5 label set contains the answers
 # for the 58 labelled studies, so whether those 58 may be used to *measure* depends entirely on
@@ -26,7 +30,7 @@
 # recipe, so these numbers validate that a model works; they do not rank models that are close.
 #
 # Everything runs in this notebook on one T4 with the internet off: reading all 4,407 training
-# studies, arm-1 inference, fine-tuning, blending, and writing the submission. About three hours.
+# studies, arm-1 inference, fine-tuning, blending, and writing the submission. About 3.7 hours.
 
 # %%
 import os
@@ -39,6 +43,7 @@ import gc, glob, hashlib, json, math, pathlib, shutil, time, unicodedata, warnin
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pydicom
@@ -132,7 +137,7 @@ log(f"disk free /kaggle/tmp {shutil.disk_usage('/kaggle/tmp').free / 1e9:.1f} GB
     f"RAM {os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / 1e9:.1f} GB")
 
 # %% [markdown]
-# ## Write a valid submission before doing anything else
+# ## 📝 Write a valid submission before doing anything else
 #
 # Same rule as the first notebook, for the same reason. When this is submitted, Kaggle runs it
 # again against a hidden test set, and a run that fails part way through scores nothing. The
@@ -160,7 +165,7 @@ write_submission(pd.DataFrame(0.5, index=test.StudyInstanceUID, columns=LABELS))
 log("wrote a placeholder submission.csv")
 
 # %% [markdown]
-# ## Shared helpers
+# ## 🧰 Shared helpers
 #
 # Carried over from the first notebook: the HTML table display, the bounded file finder, the
 # scorers, and the bootstrap. The bounded finder matters more than it looks: a recursive glob
@@ -284,7 +289,7 @@ def contains_the_answers(labels: pd.DataFrame) -> dict:
             "contains the answers": bool(exact_on > 0.999 and match > 0.999 and exact_off < 0.01)}
 
 # %% [markdown]
-# ## The fine-tuning labels
+# ## 🏷️ The fine-tuning labels
 #
 # One published set is attached: `yunusgmsoy/rsna-knee-llm-labels-4-source-merged`, file
 # `report_labels_v5.csv`. It merges four language-model label sets and, unlike every honest set
@@ -328,7 +333,7 @@ note(f"Policy for this run: `INCLUDE_GOLD={INCLUDE_GOLD}`. "
         "honest measurements."))
 
 # %% [markdown]
-# ## The split
+# ## ✂️ The split
 #
 # Two dispositions of the 4,407 studies, decided before anything is trained. A fifth of the
 # studies go to a holdout by a hash of the report text, which keeps studies sharing a report on
@@ -371,7 +376,7 @@ log(f"fine-tune set         {len(ft_ids):,}   ({'gold + report twins included' i
 log(f"report twins handled  {n_twins}")
 
 # %% [markdown]
-# ## The raptor arm, ported
+# ## 🦾 The raptor arm, ported
 #
 # Everything in the next two cells is ported from the public inference notebook of
 # `dreaddevelopment/knee-mri-twelve-findings-from-a-single-model`, as exactly as the code can be
@@ -551,7 +556,7 @@ def window_centers(mask):
     return cs or [max(1, min((lo + hi) // 2, MAXS - 2))]
 
 # %% [markdown]
-# ### The preprocessing, also ported
+# ### 🖼️ The preprocessing, also ported
 
 # %%
 def _fs(row):
@@ -725,7 +730,7 @@ def get_stack(sid):
     return vol, mask
 
 # %% [markdown]
-# ## Load the checkpoint
+# ## 📦 Load the checkpoint
 #
 # The file is a dictionary, not a bare state dict, and it carries its own provenance: the
 # architecture name, the resolution it expects, the label order it was trained with, which epoch
@@ -769,7 +774,7 @@ log(f"sanity forward: {MS_WINDOW:.0f} ms/window at {RES}px -> "
     f"~{MS_WINDOW * K_EVAL / 1000:.1f} s/study at {K_EVAL} windows")
 
 # %% [markdown]
-# ## Pass 1: read every training study once
+# ## 📚 Pass 1: read every training study once
 #
 # The arithmetic that decides how this is built: 4,407 studies of 64 slices at 336 by 336, one
 # byte per pixel, is **31.8 GB**. That cannot live in the RAM of a Kaggle box, so the stacks go to
@@ -841,7 +846,7 @@ facts([("studies decoded and cached", n_done),
 log(f"pass 1 done: {n_done:,} studies in {TIMINGS['pass1_read_s']:.0f}s")
 
 # %% [markdown]
-# ## Reproduction check: arm 1 against the radiologist
+# ## 🔍 Reproduction check: arm 1 against the radiologist
 #
 # The number this whole notebook is anchored to. Their checkpoint stores 0.9167 for these 58
 # studies and their notebook's comment says 0.9054 for the same file; one of those two describes
@@ -877,7 +882,24 @@ else:
         f"their 0.9054-0.9167. Read the preprocessing before trusting anything below.")
 
 # %% [markdown]
-# ## Rung 1: arm 1 on the test set
+# ## 📈 Arm 1 per finding: where the checkpoint is strong, and where it is not
+
+# %%
+order1 = auc1_gold.sort_values()
+fig, ax = plt.subplots(figsize=(8, 4.5))
+bar_colors = ["#d62728" if v < 0.85 else "#1f77b4" for v in order1.values]
+ax.barh(order1.index, order1.values, color=bar_colors)
+ax.axvline(float(auc1_gold.mean()), color="k", ls="--", lw=1,
+           label=f"mean {auc1_gold.mean():.4f}")
+ax.set_xlim(0.5, 1.0)
+ax.set_xlabel("AUC on the 58 radiologist studies")
+ax.set_title("Arm 1 (their checkpoint, this pipeline) per finding — red is below 0.85")
+ax.legend(loc="lower right")
+plt.tight_layout()
+plt.show()
+
+# %% [markdown]
+# ## 🚀 Rung 1: arm 1 on the test set
 #
 # The first real submission, written the moment arm 1 has predicted the test set. On the public
 # run that is a handful of studies and takes seconds; on the scored run it is the hidden test, at
@@ -911,7 +933,7 @@ log(f"RUNG 1 written: {len(sub1)} rows, arm 1 only, {n_fallback} fallback rows "
     f"({TIMINGS['rung1_s']:.0f}s)")
 
 # %% [markdown]
-# ## Arm 1 on the holdout
+# ## 📏 Arm 1 on the holdout
 #
 # The blend weight later is chosen here, not on the 58, so arm 1 needs scores for the same
 # holdout the fine-tuned arm will be measured on. If pass 1 was truncated, the holdout shrinks to
@@ -936,7 +958,7 @@ log(f"arm 1 on the holdout: {len(ho_ids)} studies, weak-label mean AUC {arm1_ho_
 np.savez_compressed("/kaggle/tmp/arm1_holdout.npz", ids=np.array(ho_ids), probs=P1_ho)
 
 # %% [markdown]
-# ## Fine-tune arm 2 from the checkpoint
+# ## 🎯 Fine-tune arm 2 from the checkpoint
 #
 # The second arm starts from their weights and continues on the v5 labels, with three deliberate
 # departures from a from-scratch run. The learning rate is 1e-5, flat-ish and low, because the
@@ -1074,7 +1096,7 @@ else:
     log("no epoch completed; rung 1 stands")
 
 # %% [markdown]
-# ## Arm 2 measured, then the blend weight
+# ## ⚖️ Arm 2 measured, then the blend weight
 #
 # Arm 2 gets the same full-window measurement arm 1 got. In the honest mode the gold-58 numbers
 # are the radiologist-grade check, with the bootstrap interval; in the include-gold mode they sit
@@ -1153,7 +1175,39 @@ else:
     log("blend skipped: arm 2 has no scores; W_BLEND stays 0.0")
 
 # %% [markdown]
-# ## Rung 2: the blended submission
+# ## 📈 Two arms per finding, and what the blend weight is worth
+
+# %%
+if np.isfinite(arm2_gold_mean):
+    fig, ax_l = plt.subplots(figsize=(7.5, 4.5))
+    xs = np.arange(len(LABELS))
+    ax_l.bar(xs - 0.2, auc1_gold.loc[LABELS].values, 0.4,
+             label=f"arm 1 (mean {auc1_gold.mean():.4f})")
+    ax_l.bar(xs + 0.2, auc2_gold.loc[LABELS].values, 0.4,
+             label=f"arm 2 (mean {arm2_gold_mean:.4f})")
+    ax_l.set_xticks(xs)
+    ax_l.set_xticklabels(LABELS, rotation=45, ha="right")
+    ax_l.set_ylim(0.5, 1.0)
+    ax_l.set_title("Per-finding AUC on the 58" +
+                   (" — arm 2 saw them in training (contaminated)" if INCLUDE_GOLD else ""))
+    ax_l.legend(loc="lower right")
+    plt.tight_layout()
+    plt.show()
+if np.isfinite(blend_ho_weak):
+    fig, ax_r = plt.subplots(figsize=(6.5, 4))
+    ax_r.plot(ws, scores, "o-")
+    ax_r.axvline(W_BLEND, color="r", ls="--", lw=1, label=f"w* = {W_BLEND:.2f}")
+    ax_r.set_xlabel("arm-2 weight in the rank blend")
+    ax_r.set_ylabel("holdout weak-label AUC")
+    ax_r.set_title("Blend weight, chosen on the holdout (never on the 58)")
+    ax_r.legend()
+    plt.tight_layout()
+    plt.show()
+if not np.isfinite(arm2_gold_mean) and not np.isfinite(blend_ho_weak):
+    log("arm-2 measurements unavailable this run; no two-arm charts")
+
+# %% [markdown]
+# ## 🏁 Rung 2: the blended submission
 #
 # All-or-nothing, by the same rule the first notebook used for its model stage: the projected
 # cost of arm 2 on the test set is measured from arm 1's per-study time, and if it does not fit
@@ -1188,7 +1242,29 @@ else:
     log("rung 2 skipped: no fine-tuned arm or too late; rung 1 stands")
 
 # %% [markdown]
-# ## The measurements this run leaves behind
+# ## 🖼️ What one study looks like to the model
+
+# %%
+if USE_MM and n_done and gold_ids[0] in idx_of:
+    vol0 = np.asarray(STACKS[idx_of[gold_ids[0]]])
+    slot_names = ["Sagittal FS", "Sagittal", "Coronal FS", "Coronal", "Axial"]
+    bounds = np.cumsum([s[2] for s in SLOTS])
+    picks = np.linspace(0, MAXS - 1, 16).round().astype(int)
+    fig, axes = plt.subplots(4, 4, figsize=(8.5, 8.5))
+    for a, i in zip(axes.flat, picks):
+        a.imshow(vol0[i], cmap="gray")
+        a.set_title(f"slot {i}: {slot_names[int(np.searchsorted(bounds, i, side='right'))]}",
+                    fontsize=8)
+        a.axis("off")
+    fig.suptitle(f"16 of {MAXS} slots, one radiologist-labelled study "
+                 f"({short_uid(gold_ids[0])}) — decoded first in pass 1")
+    plt.tight_layout()
+    plt.show()
+else:
+    log("no decoded stacks cached this run; skipping the study grid")
+
+# %% [markdown]
+# ## 📊 The measurements this run leaves behind
 
 # %%
 sub_final = pd.read_csv("submission.csv")
@@ -1243,7 +1319,44 @@ log("MEASUREMENT_JSON " + json.dumps(MEAS, separators=(",", ":"), default=str))
 log(f"submission.csv ready: {len(sub_final)} rows x {len(sub_final.columns)} cols")
 
 # %% [markdown]
-# ## What to do with this run
+# ## ⏱️ Where the hours went
+
+# %%
+phases = [("pass1_read_s", "pass 1: decode every study"), ("arm1_gold_s", "arm 1 on the 58"),
+          ("arm1_holdout_s", "arm 1 on the holdout"), ("finetune_s", "fine-tune arm 2"),
+          ("rung1_s", "rung 1: arm 1 on test"), ("rung2_s", "rung 2: blend on test")]
+timed = [(nm, TIMINGS[k] / 60.0) for k, nm in phases if k in TIMINGS]
+if timed:
+    fig, ax = plt.subplots(figsize=(8, 3.2))
+    ax.barh([t[0] for t in timed], [t[1] for t in timed])
+    ax.set_xlabel("minutes")
+    ax.set_title(f"one T4, total {(time.time() - T0) / 3600:.1f} h")
+    plt.tight_layout()
+    plt.show()
+
+# %% [markdown]
+# ## 💡 What the runs behind 0.926 settled
+#
+# - **The reproduction landed between their two published numbers.** This pipeline prints
+#   0.9128 on the 58; the checkpoint stores 0.9167 and their notebook's comment says 0.9054
+#   for the same file. One of those described a different run.
+# - **The 58-study gate predicts the leaderboard.** Blend gate 0.9170 here became 0.926 on
+#   the public board; the first notebook's 0.778 became 0.798. Same direction both times,
+#   about +0.01–0.02, so the 58 stay the steering instrument — for direction, not for
+#   ranking close models.
+# - **Putting the 58 into training bought nothing out-of-sample.** Holdout weak AUC 0.9092
+#   with them in fine-tuning against 0.9097 with them out. The final submission still comes
+#   from the gold-in run: the holdout says it costs nothing, and 52 extra radiologist-read
+#   studies cannot hurt on the hidden test.
+# - **A bug in the original pipeline, kept visible.** Their `_pick_series_for_slot` does
+#   `int(r.get('Fluid_Sensitive', 0) or 0)`; NaN is truthy, `int(nan)` raises, and their
+#   per-study try/except turns those studies into silent 0.5 submissions. This port treats
+#   NaN as no-preference and logs whether the column exists.
+# - **The weak findings are the soft-tissue ones.** Synovitis (~0.78) and patellofemoral OA
+#   (~0.82) sit well below the rest; a mean over twelve findings hides that.
+
+# %% [markdown]
+# ## 🧭 What to do with this run
 #
 # Two pushes are planned. This one ran with `INCLUDE_GOLD=False`, so its numbers are measurements:
 # the arm-1 reproduction against their two published numbers, arm 2's gain, the blend curve, all

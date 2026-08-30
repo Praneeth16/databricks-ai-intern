@@ -1,6 +1,6 @@
 {
  "id": "paiky1995/rsna-knee-reproduce-raptor-then-fine-tune-on-it",
- "title": "RSNA Knee: reproduce raptor, then fine-tune on it",
+ "title": "🦵 RSNA Knee: 0.926 LB, CoaTNet + fine-tune blend",
  "code_file": "model-v2.ipynb",
  "language": "python",
  "kernel_type": "notebook",
