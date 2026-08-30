@@ -267,6 +267,72 @@ versions:
   # twice as many models. Mixed fold counts still stack: every train row gets exactly one
   # out-of-fold prediction either way.
 
+  # ---- tier 1: the known-good treatment applied to the decorrelated members ------
+  # Measured on the lookup family, 5f/1seed -> 10f/3seeds was worth +0.000615
+  # (0.968293 -> 0.968908). Every member below was still at 5 folds and one seed while
+  # the two blend pillars were at ten and three, so this is the same intervention on the
+  # members that never received it, ranked by how decorrelated they are from those
+  # pillars rather than by solo score.
+
+  - id: v21_realmlp_10f
+    model: realmlp
+    features: [raw, te, freq, comp, lattice, identity]
+    folds: 10
+    seeds: [42, 777, 2026]
+    note: >
+      v17 at ten folds and three seeds. v17's own note called it "carried for strength
+      rather than decorrelation"; the correlation matrix says the opposite. At 0.9832 it
+      is the LEAST correlated strong member against the two pillars (v19 0.9664,
+      v20 0.9832), lower than TabM's 0.9946 on the identical feature set. Since blend
+      contribution tracks the strength gap rather than correlation, the most decorrelated
+      member being the least-trained one is the largest single gap in the pool.
+    oof_auc: 0.968562
+    lb_auc: null
+
+  - id: v22_mlp_enc_10f
+    model: mlp
+    features: [raw, te, freq, comp, lattice, identity]
+    folds: 10
+    seeds: [42, 777, 2026]
+    note: >
+      A plain MLP on the shared feature matrix: no piecewise-linear embeddings, no batch
+      ensemble. Second-least-correlated candidate at 0.9793 max against the pillars, but
+      only 0.965032 solo at 5f/1seed, so it is the clearest case of diversity that cannot
+      cash out until the strength gap closes. Also a controlled test of why TabM is
+      redundant: TabM on these same features measures 0.9946, and the main difference is
+      its k=32 internal averaging, which pulls a ranking toward consensus the way boosting
+      does. If this member lands near 0.968 at 0.979 correlation, that reading is right.
+      MEASURED: 0.965511 solo, still below the ~0.966 cliff -- zero blend weight, as feared.
+    oof_auc: 0.965511
+    lb_auc: null
+
+  - id: v23_lookup_aug_10f
+    model: lookup
+    features: [raw]
+    folds: 10
+    seeds: [42, 777, 2026]
+    params:
+      aug: 0.25
+      drop: 0.15
+      epochs: 40
+    note: >
+      v16 at ten folds and three seeds. It already carries 0.12 blend weight at 5f/1seed
+      and sits only 0.00075 behind the lookup pillar, so it is the closest member to
+      pillar strength after realmlp.
+    oof_auc: 0.968845
+    lb_auc: null
+
+  - id: v24_cat_enc_10f
+    model: cat
+    features: [raw, te, freq, comp, lattice, identity]
+    folds: 10
+    seeds: [42, 777, 2026]
+    note: >
+      v9 at ten folds and three seeds. A third boosting family (ordered target statistics)
+      rather than a third net, and 0.9661 against the lookup pillar.
+    oof_auc: 0.968445
+    lb_auc: null
+
   - id: v19_lookup_bag_10f
     model: lookup
     features: [raw]
@@ -291,6 +357,43 @@ versions:
       this feature set scored 0.966850 against the incumbent's 0.966853 on the same
       subsample and fold, so tuning is exhausted here and the fold count is not.
     oof_auc: 0.968778
+    lb_auc: null
+
+  # ---- the last untapped lever: a NEW representation, not more folds/seeds -------
+  # Rule 14 showed fold/seed averaging spends diversity: v19/v20/v21/v23 at 10f landed
+  # the honest blend at nested ~0.96949, statistically level with the 0.969484 already
+  # submitted. Every prior lookup variant (v15 wide, v16 aug) changed capacity or
+  # augmentation, never the input representation. This one does.
+
+  - id: v25_lookup_multires
+    model: lookup
+    features: [raw]
+    folds: 5
+    seeds: [42]
+    params:
+      multires: [64, 256, 1024]
+      epochs: 40
+    note: >
+      Lookup transformer with multi-resolution quantile-bin token streams. Alongside
+      each numeric column's exact-value embedding (which memorises the generator's
+      value->label lookup but shares nothing across neighbouring values), add coarse-
+      to-fine quantile-bin tokens at 64/256/1024, each with its own embedding table.
+      The bins expose monotone/threshold structure the exact table cannot represent, at
+      several granularities -- a different representation, so a member meant to add
+      diversity to an already-saturated pool rather than spend it. First run is 5f/1seed
+      to measure solo AUC and correlation against the two lookup pillars; only if it
+      lands near 0.968 at correlation below ~0.985 is a 10f/3seed run worth it.
+      MEASURED (5f/1seed): solo OOF 0.967489 -- the WEAKEST strong member, ~0.0014 below
+      the lookup pillar. But max Spearman is 0.9779 (0.962-0.969 against the whole lookup
+      family), against a pool whose every other pair floors at 0.986 and whose plain
+      lookups sit at 0.9952 with each other. So the representation hypothesis held: multi-
+      resolution binning made the single most decorrelated member in the pool. It still
+      does NOT cash out -- paired nested blend delta was -0.000121 (seed 1) and -0.000062
+      (seed 42), both negative. At this pool size (~13 own members) the 0.0014 strength
+      deficit outweighs the decorrelation and the greedy over-picks it on training noise.
+      Rejected for the honest blend; would likely help only inside a large redundant
+      library stack (Rule 15). Arrays kept on the Volume; the 10f/3seed run is NOT worth it.
+    oof_auc: 0.967489
     lb_auc: null
 
 # Hypotheses deliberately NOT pursued, each with the reason. Recorded so the agent

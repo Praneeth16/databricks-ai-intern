@@ -1,0 +1,5 @@
+Lets go to our next competition -> https://www.kaggle.com/competitions/rsna-knee-abnormality-detection
+Now this one is heavy on images lets leverage my databricks lakebase workspace for everything.
+First agenda -> lets do an unique perspective on the EDA of data which is not present currently.
+And build a notebook around that and submit a minimal basic model submission.
+Agenda lets target Notebook Gold. Worldclass kaggle grade notebook using /plain-writing skill.

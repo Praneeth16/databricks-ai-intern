@@ -270,6 +270,9 @@ def fit_predict(model: str, Xtr, ytr, Xva, yva, Xte, cat_cols: list[str], seed: 
     if model == "tabm":
         return _fit_tabm(Xtr, ytr, Xva, yva, Xte, cat_cols, seed, overrides)
 
+    if model == "mlp":
+        return _fit_mlp(Xtr, ytr, Xva, yva, Xte, cat_cols, seed, overrides)
+
     raise ValueError(f"unknown model: {model}")
 
 
@@ -364,6 +367,143 @@ def _fit_tabm(Xtr, ytr, Xva, yva, Xte, cat_cols: list[str], seed: int, overrides
     return predict(Nva, Cva), predict(Nte, Cte), ep + 1
 
 
+def _fit_mlp(Xtr, ytr, Xva, yva, Xte, cat_cols: list[str], seed: int, overrides: dict):
+    """A plain MLP on the shared encoded feature matrix. No embeddings, no batch ensemble.
+
+    Carried because it is measurably the second-least-correlated strong candidate against
+    the two heaviest blend members (0.9793 max, against TabM's 0.9946 on the *same*
+    features). TabM differs from this net mainly by averaging k=32 internal members, and
+    averaging pulls a ranking toward the consensus ordering, which is roughly what a
+    boosted ensemble also produces. So the batch ensemble that makes TabM strong is also
+    what makes it redundant here, and dropping it is the point of this member.
+
+    Preprocessing matches _fit_tabm so the two stay comparable: quantile-transform the
+    numeric columns, fill from the training fold's median only. Categoricals are one-hot
+    encoded rather than embedded, since their cardinality here is 2 to 3 levels.
+    """
+    import torch
+    import torch.nn as nn
+    from sklearn.preprocessing import QuantileTransformer
+
+    p = dict(hidden=512, depth=3, drop=0.1, epochs=40, batch_size=4096, lr=2e-3,
+             weight_decay=1e-5, aug=0.10, pct_start=0.15, grad_clip=1.0,
+             ema_decay=0.999, patience=5)
+    p.update(overrides)
+
+    dev = torch.device("cuda" if torch.cuda.is_available()
+                       else "mps" if torch.backends.mps.is_available() else "cpu")
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    generator = torch.Generator().manual_seed(seed)
+
+    num_cols = [c for c in Xtr.columns if c not in cat_cols]
+    med = Xtr[num_cols].median()
+    qt = QuantileTransformer(output_distribution="normal", n_quantiles=1000,
+                             subsample=200_000, random_state=seed)
+
+    def prep(X):
+        parts = [qt.transform(X[num_cols].fillna(med)).astype(np.float32)]
+        for c in cat_cols:
+            codes = X[c].cat.codes.to_numpy()
+            n_lev = Xtr[c].cat.categories.size + 1
+            oh = np.zeros((len(X), n_lev), dtype=np.float32)
+            oh[np.arange(len(X)), np.where(codes < 0, n_lev - 1, codes)] = 1.0
+            parts.append(oh)
+        return np.nan_to_num(np.concatenate(parts, axis=1), nan=0.0)
+
+    qt.fit(Xtr[num_cols].fillna(med))
+    Atr, Ava, Ate = prep(Xtr), prep(Xva), prep(Xte)
+    n_num = len(num_cols)
+
+    class DenseMLP(nn.Module):
+        def __init__(self, width):
+            super().__init__()
+            layers, d_in = [], width
+            for _ in range(int(p["depth"])):
+                layers += [nn.Linear(d_in, int(p["hidden"])),
+                           nn.BatchNorm1d(int(p["hidden"])), nn.GELU(),
+                           nn.Dropout(float(p["drop"]))]
+                d_in = int(p["hidden"])
+            layers.append(nn.Linear(d_in, 1))
+            self.net = nn.Sequential(*layers)
+
+        def forward(self, x):
+            return self.net(x).squeeze(-1)
+
+    m = DenseMLP(Atr.shape[1]).to(dev)
+    opt = torch.optim.AdamW(m.parameters(), lr=float(p["lr"]),
+                            weight_decay=float(p["weight_decay"]))
+    bs, epochs = int(p["batch_size"]), int(p["epochs"])
+    steps = int(np.ceil(len(Atr) / bs)) * epochs + 10
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, float(p["lr"]), total_steps=steps,
+                                                pct_start=float(p["pct_start"]))
+    loss_fn = nn.BCEWithLogitsLoss()
+    tA = torch.tensor(Atr)
+    tY = torch.tensor(ytr.astype(np.float32))
+    params = list(m.parameters())
+    ema = [v.detach().clone() for v in params]
+    ema_step = 0
+
+    def predict(A):
+        m.eval()
+        out = []
+        with torch.no_grad():
+            for b in range(0, len(A), 16384):
+                out.append(torch.sigmoid(
+                    m(torch.tensor(A[b:b + 16384]).to(dev))).float().cpu().numpy())
+        return np.concatenate(out).astype(np.float64)
+
+    best_auc, best_weights, waited, ep = -1.0, None, 0, 0
+    for ep in range(epochs):
+        m.train()
+        perm = torch.randperm(len(tA), generator=generator)
+        for b in range(0, len(tA), bs):
+            idx = perm[b:b + bs]
+            xb = tA[idx].to(dev).clone()
+            if float(p["aug"]) > 0:
+                # Blank whole numeric cells at the natural missing rate. The categorical
+                # one-hot block is left alone: zeroing part of a one-hot row would encode
+                # "no level", which is not a state the encoder can produce.
+                drop = torch.rand((xb.shape[0], n_num), device=dev) < float(p["aug"])
+                xb[:, :n_num] = torch.where(drop, torch.zeros_like(xb[:, :n_num]),
+                                            xb[:, :n_num])
+            loss = loss_fn(m(xb), tY[idx].to(dev))
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(params, float(p["grad_clip"]))
+            opt.step()
+            sched.step()
+            # Warmed-up EMA horizon: a fixed 0.999 leaves a short run averaging mostly
+            # its own random initialisation. See the lookup trainer for the arithmetic.
+            ema_step += 1
+            decay = min(float(p["ema_decay"]), (1.0 + ema_step) / (10.0 + ema_step))
+            with torch.no_grad():
+                for avg, cur in zip(ema, params):
+                    avg.mul_(decay).add_(cur.detach(), alpha=1 - decay)
+
+        live = [v.detach().clone() for v in params]
+        with torch.no_grad():
+            for cur, avg in zip(params, ema):
+                cur.copy_(avg)
+        auc = float(roc_auc_score(yva, predict(Ava)))
+        if auc > best_auc + 1e-6:
+            best_auc, waited = auc, 0
+            best_weights = [v.detach().clone() for v in ema]
+        else:
+            waited += 1
+        log(f"    mlp ep{ep} val_auc={auc:.6f} best={best_auc:.6f}")
+        with torch.no_grad():
+            for cur, saved in zip(params, live):
+                cur.copy_(saved)
+        if waited >= int(p["patience"]):
+            break
+
+    with torch.no_grad():
+        for cur, best in zip(params, best_weights):
+            cur.copy_(best)
+    return predict(Ava), predict(Ate), ep + 1
+
+
 # ---------------------------------------------------------------- run one version
 
 
@@ -398,6 +538,25 @@ def run_lookup_version(spec: dict, cv: dict, train: pd.DataFrame, y: np.ndarray,
         mapping[MISSING_LEVEL] = 0
         ids.append(s.map(mapping).to_numpy(dtype=np.int64))
         vocab.append(len(cats) + 1)
+    n_exact = len(ids)
+    # Multi-resolution quantile-bin token streams. A new *representation*, not more
+    # capacity: alongside each numeric column's exact-value token, add coarse-to-fine
+    # quantile-bin tokens (e.g. 64/256/1024). The exact-value table memorises the
+    # generator's value->label lookup but shares nothing across neighbouring values;
+    # the binned tokens expose the monotone/threshold structure the exact table cannot,
+    # at several granularities. Folded into the same embedding path with disjoint
+    # offsets, so a bin token in one (column, resolution) never shares a vector with
+    # another. Off (identical to the prior lookup) when `multires` is unset.
+    for r in [int(x) for x in (p.get("multires") or [])]:
+        for c in NUM:
+            v = both[c].to_numpy(dtype=np.float64)
+            obs = ~np.isnan(v)
+            codes = np.zeros(len(v), dtype=np.int64)  # local 0 == missing
+            if obs.sum() > r:
+                binned = pd.qcut(v[obs], q=r, labels=False, duplicates="drop")
+                codes[obs] = binned.astype(np.int64) + 1
+            ids.append(codes)
+            vocab.append(int(codes.max()) + 1)
     value_ids = np.stack(ids, axis=1)
     offsets = np.concatenate([[0], np.cumsum(vocab)[:-1]]).astype(np.int64)
     value_ids += offsets[None, :]
@@ -441,7 +600,15 @@ def run_lookup_version(spec: dict, cv: dict, train: pd.DataFrame, y: np.ndarray,
     })
     column_numeric, column_missing = rank_gauss(raw_numeric)
     derived_numeric, derived_missing = rank_gauss(derived)
-    n_columns, n_derived = len(FEATURE_COLS), derived.shape[1]
+    n_columns, n_derived = value_ids.shape[1], derived.shape[1]
+    # Multi-res bin columns have no smooth branch: pad the PLR inputs with masked-off
+    # columns so each carries its embedding token only (a pure lookup over its bins).
+    extra = n_columns - column_numeric.shape[1]
+    if extra > 0:
+        column_numeric = np.concatenate(
+            [column_numeric, np.zeros((len(both), extra), dtype=np.float32)], axis=1)
+        column_missing = np.concatenate(
+            [column_missing, np.ones((len(both), extra), dtype=np.float32)], axis=1)
     n_tokens = 1 + n_columns + n_derived
 
     t_ids = torch.from_numpy(value_ids)

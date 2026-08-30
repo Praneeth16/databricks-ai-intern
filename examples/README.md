@@ -7,6 +7,7 @@ claims about the agent are checkable rather than asserted.
 |---|---|---|---|
 | [`kaggle-f1-pitstops-s6e5`](kaggle-f1-pitstops-s6e5/) | Kaggle Playground S6E5 — predict whether an F1 driver pits next lap | ROC-AUC | public LB **0.94924** (rank 1189/2457 on the first submission) |
 | [`kaggle-smartphone-addiction-s6e8`](kaggle-smartphone-addiction-s6e8/) | Kaggle Playground S6E8 — predict smartphone addiction from usage features | ROC-AUC | see that folder's `FINAL_RESULTS.md` |
+| [`kaggle-knee-rsna`](kaggle-knee-rsna/) | RSNA Knee Abnormality Detection — audit the report-derived label sets everyone trains on | mean of 12 ROC-AUC | found the 58 annotations written into two published label sets; see that folder's `FINAL_RESULTS.md` |
 
 ## The folder standard
 

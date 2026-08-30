@@ -1,0 +1,19 @@
+{
+ "id": "paiky1995/rsna-knee-masked-loss-baseline",
+ "title": "RSNA Knee: masked-loss 2.5D baseline",
+ "code_file": "knee-submit.ipynb",
+ "language": "python",
+ "kernel_type": "notebook",
+ "is_private": "false",
+ "enable_gpu": "true",
+ "enable_tpu": "false",
+ "enable_internet": "false",
+ "dataset_sources": [
+  "paiky1995/rsna-knee-masked-loss-weights"
+ ],
+ "competition_sources": [
+  "rsna-knee-abnormality-detection"
+ ],
+ "kernel_sources": [],
+ "machine_shape": "NvidiaTeslaT4"
+}
