@@ -319,3 +319,35 @@ Submitted 2026-08-29: **public leaderboard 0.926, rank 665 of 2,676** (submissio
 0.897) — above raptor's own published 0.924 for the single model. The gate-to-LB offset held a third time: blend gate 0.9170 on the 58
 predicted a leaderboard score in the low 0.92s; it landed 0.009 above the gate, the same
 direction and half the size of the baseline's 0.778 → 0.798 offset.
+
+## v3: SWA third arm, 8 epochs, test TTA, 3-way blend (kernel v13/v14, 2026-08-31)
+
+Three changes over v2, each attributable. `EPOCHS_FT` 3 to 8, a third arm from
+raptor's SWA checkpoint (`raptor_ft_coatnet_v4_full_swa.pt`, epochs 12-14
+averaged), test-only TTA (two shifted-center passes averaged), and the blend
+generalized to a three-way simplex grid scored on the holdout. Two-push protocol
+kept: v13 honest (`INCLUDE_GOLD=False`), v14 gold-in.
+
+Honest run (v13, 5.62 h):
+
+- Arm 1 gold 0.9128 — the reproduction is stable across three sessions.
+- Arm 2, 8 epochs, **epoch 3 still selected**: gold 0.9139, holdout weak 0.9012.
+  The extra five epochs bought nothing; the cosine schedule's longer runway did
+  not move the optimum. This lever is dead.
+- Arm 3 (SWA): gold 0.9139, holdout weak **0.9101** — best single arm, ahead of
+  arm 1's 0.9083 without any training of our own.
+- 3-way blend: **w\* = (0.0, 0.2, 0.8), holdout weak 0.9106** vs 0.9095 two-way
+  and 0.9083 arm-1 alone. The holdout drops arm 1 entirely: the SWA checkpoint
+  is a strictly better version of the same model, so the base arm's weight goes
+  to its averaged twin. Blend beats v2's 0.9093 by +0.0013.
+
+Gold-in run (v14, 5.72 h): fine-tune set 3,575, epoch 6 selected (the bigger set
+shifted the optimum later), arm-2 gold 0.9579 flagged contaminated by design,
+blend w\* = (0.0, 0.3, 0.7), holdout weak 0.9110 — statistically identical to
+the honest 0.9106, the same gold-in-buys-nothing result as v2. **This run's
+submission is the final v3 candidate** (3-way rank blend, TTA-averaged test
+probs, rung 3).
+
+The SWA checkpoint was the whole gain: +0.0013 holdout over v2 for zero training
+cost. If the gate-to-LB offset holds a fourth time, the expected LB is
+~0.92-0.93. Awaiting user submission of the v14 output in the Kaggle UI.

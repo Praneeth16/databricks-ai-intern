@@ -70,7 +70,7 @@ uv run python scripts/audit_labels.py --root /tmp/rsnaknee --label-root /tmp/rsn
 
 ## 3. Model v2: reproduce raptor, fine-tune a second arm, blend
 
-[RSNA Knee: reproduce raptor, then fine-tune on it](https://www.kaggle.com/code/paiky1995/rsna-knee-reproduce-raptor-then-fine-tune-on-it)
+[🦵 RSNA Knee: 0.926 LB, CoaTNet + fine-tune blend](https://www.kaggle.com/code/paiky1995/rsna-knee-0-926-lb-coatnet-fine-tune-blend)
 
 One notebook that ports the public 0.924-LB raptor pipeline (CoaTNet-2, 64-slice stacks,
 CC0 checkpoints), verifies it against the 58 radiologist studies (0.9128 reproduced),
@@ -90,6 +90,12 @@ Two-push protocol: push once with `INCLUDE_GOLD = False` (the honest measurement
 still a valid submission), then flip to `True` and push the final submission version
 (the 58 and their report twins go into fine-tuning; the printed gold numbers carry a
 contamination banner).
+
+v3 (kernel v13/v14, 2026-08-31) adds a third arm from raptor's SWA checkpoint, 8
+fine-tune epochs, and test-only TTA. The holdout's 3-way blend drops arm 1 entirely
+(w\* = 0.0/0.3/0.7, holdout weak 0.9110 vs v2's 0.9093): the SWA twin is a strictly
+better base model. Extra epochs bought arm 2 nothing — epoch 3 still selected. The
+v14 gold-in run is the final v3 submission candidate.
 
 ## Building and pushing the notebook
 
