@@ -80,7 +80,7 @@ FINAL_WRITE_BY = HARD_DEADLINE - 0.25 * 3600
 # fine-tuning, so every number against them is a measurement. True: they go in (their v5 labels
 # are the exact annotations), the run is the submission run, and the 58-study number printed is
 # contaminated by construction. Two pushes: first False to measure, then True to submit.
-INCLUDE_GOLD = False
+INCLUDE_GOLD = True
 
 HOLDOUT_FRAC = 0.20                 # report-hash holdout, excluded from fine-tune in BOTH modes
 W_WINDOWS = 12                      # windows sampled per study per epoch
