@@ -137,6 +137,13 @@ all 691,369 train feature-tuples are unique with only 2 of 296,302 test rows mat
 
 ## Honest ceiling, and where the leaderboard stops being evidence
 
+> **Superseded in part — read [§ Posthoc](#posthoc--private-results-and-what-the-writeups-say-we-missed)
+> before trusting this section.** The measurements below hold. The *conclusion* that the
+> 0.9711 band was unreachable by honest modelling does not: the competition was won by a
+> single RealMLP at CV 0.97070, roughly +0.0006 above what the entire public OOF pool reaches
+> when stacked. What was measured here is that the **public pool** had converged, which is not
+> the same claim as the **problem** having converged.
+
 ![Leaderboard position](artifacts/leaderboard-position.png)
 
 The public LB tops out at **0.97142** across 1,700 teams. The best score reachable from
@@ -250,6 +257,12 @@ arm was run at all.
 
 ### Where top-10 actually lives
 
+> **Superseded in part — see [§ Posthoc](#posthoc--private-results-and-what-the-writeups-say-we-missed).**
+> Everything measured below about the *borrowed* track is correct and was confirmed on private
+> (variant B2 converged on 0.97080, just under the artifacts it borrowed). What this section
+> misses is the third route: the 1st-place team reached the top with a single honest model at
+> CV 0.97070, so "borrow, or accept 0.9705" was a false dichotomy.
+
 Top-10 on the public leaderboard is 0.97130, and 203 teams sit inside 0.9711-0.9713 while the
 gap from 1st to 10th is 0.00012 — smaller than the noise floor of a 59k-row public split.
 Pulling the notebooks in that band shows what they are: the 0.97113 and 0.97117 entries are
@@ -290,6 +303,228 @@ XGBoost member, which put the full ladder out of reach in one session. Dropping 
 `lr=0.02` / `max_bin=255` costs on the order of 0.0002–0.0005 OOF and returns most of the
 wall clock. The LightGBM rows above are therefore slightly understated relative to the
 XGBoost row — that is a budget decision, not a modelling finding.
+
+## Posthoc — private results and what the writeups say we missed
+
+Written 2026-09-01, after the private leaderboard and the winners' writeups published.
+Everything here is measured: our private scores come from the Kaggle submissions API
+(`artifacts/posthoc/our-submissions-private.json`), the winners' numbers from their own
+writeups and charts (`artifacts/posthoc/*.png`).
+
+### Where we actually finished
+
+**458 / 3,532 teams** — private 0.97080, on the borrowed variant B2.
+
+Both final slots were filled by Kaggle's default (best two public scores), so B2 and B were
+selected without us choosing. That cost nothing: B2 private 0.97080 beat variant A's
+0.97022, so the borrowed track was ahead on private too. It bought roughly half the field.
+
+| version | our OOF | public LB | **private LB** |
+|---|---|---|---|
+| v4_xgb_full_fe | 0.968434 | 0.96982 | 0.96944 |
+| v6_logit_stack | 0.968503 | 0.96979 | 0.96943 |
+| v7_xgb_ident_bag | 0.968655 | 0.96992 | 0.96961 |
+| **variant A — own models only** | 0.969450 | 0.97052 | **0.97022** |
+| pool-7 hillclimb (own) | 0.969484 | 0.97053 | 0.97024 |
+| variant B — + 74-model public library | 0.969680 | 0.97084 | 0.97060 |
+| **variant B2 — + najiama 19_blend (SELECTED)** | — | 0.97104 | **0.97080** |
+
+Private LB context: 1st 0.97176, 7th 0.97112, 25th 0.97106, ~50th 0.97103.
+**Gap from us to top-50 was 0.00023.** One live feature family, not a compute deficit.
+
+### Miss 1 — missingness: we falsified one sub-family and wrote off the whole family
+
+The 1st-place winner (Chris Deotte) on what broke his plateau: *"One new large source of
+signal and feature engineering was all the missing values... the agents found many features
+related to missingness which gave improvements to CV and LB."* His winning single model's
+filename is `submission_77_realmlp_repair20_single.csv` — **`repair`, iteration 20.** That
+model alone scored private 0.97145, about 4th place.
+
+Talha Tursun measured missingness-style augmentation at **+0.0014 on a solo NN**, shrinking
+to ~0 inside blends — precisely the lever a pool-blending campaign discards and a
+single-model campaign keeps. Ravi Ramakrishnan (25th) ran "secondary models for null values
+across columns".
+
+What we tested, and what each test actually licensed:
+
+| our test | result | what it actually falsified |
+|---|---|---|
+| NaN-indicator features | −0.00001 | the **pattern** of missingness as a direct predictor. Correct, and independently confirmed: Georgy Mamarin measured count-of-missing at AUC 0.5017, max per-column gap 0.0042 against a 0.709 base rate |
+| MC marginalising over missing | 0.95240 vs 0.96328 | that **method**. Sampling from marginals discards feature correlations — says nothing about the family |
+| constrained `daily`↔`weekend` imputation | −0.00002 | that **pair**. The U(0.5,3) window only holds for ~54% of comparable synthetic rows |
+
+The live sub-family we never tried: **value recovery through the accounting identity.**
+`daily ≥ social + gaming + work` holds on 100% of rows — we verified that ourselves and used
+the residual as a feature on *observed* rows only. Run the other direction, a missing driver
+is partly recoverable by exact arithmetic from the columns that remain. Georgy Mamarin sized
+it: **46% of what `gaming_hours` and `work_study_hours` add on top of the three screen
+columns disappears once you keep only rows where both drivers are observed.** Nearly half of
+that apparent signal was value recovery.
+
+Three things we never ran: identity-derived bounds per missing pattern, model-based
+imputation per column ("null-secondary models"), missingness-shaped augmentation on a
+strong NN member. Our one augmentation test was masking aug 0.25 on the lookup transformer
+(−0.00014), and we generalised from it.
+
+**The generalisation got codified.** `scripts/agent-prompt.txt` and the
+`kaggle-tabular-classification` skill both carried `do NOT add NaN-indicator features:
+missingness is MCAR`. Written from the pattern result, read as a verdict on the family, so
+neither the agent nor the local ladder could rediscover it. This is the *same* error this
+document already records once ("three failed feature ideas is not evidence that features are
+exhausted") — committed a second time in the same session, one level up: three failed
+missingness ideas were taken as evidence about missingness.
+
+Deotte's human unlocked it with one question at a plateau: *"have you studied the missing
+values and found features to deal with them?"* Nothing in our loop asked that.
+
+### Miss 2 — single-model strength, and the fact that ONE agent beat our whole campaign
+
+`artifacts/posthoc/phases.png` plots his public LB and model count against date, with the
+Phase One / Phase 2-3-4 boundary marked at Aug 23.5:
+
+| | date | public LB | models |
+|---|---|---|---|
+| Phase One start | Aug 19 | 0.97050 | ~10 |
+| **Phase One end — a single autonomous agent, alone** | Aug 23.5 | **~0.97127** | ~270 |
+| swarm end (13 workers) | Aug 28 | 0.97206 | 449 |
+
+**One agent, running unattended for 4 days and submitting to Kaggle by itself, reached
+0.97127 public — above our 0.97104 with other people's predictions blended in, and well
+above our 0.97053 own-models best.** It crossed the public top-10 line before the second
+agent existed. The 12 extra workers of phases 2-4 added +0.0008; Phase One had added
++0.0008 by itself from a standing start.
+
+So the separator was not the swarm. It was **autonomy duration with a self-submit loop.**
+Our agent ran under a 45-minute wall-clock budget that we wrote into the prompt ourselves.
+
+`artifacts/posthoc/top1s.png` — two agents (Codex GPT 5.6 Sol, Claude Fable 5) racing on
+best single model, staircase curves, ~8-10 discrete steps each over six days:
+
+| | Aug 24 | Aug 30 | gain |
+|---|---|---|---|
+| best single overall (RealMLP), GPT | 0.96941 | **0.970706** | +0.00130 |
+| best single overall (RealMLP), Fable | 0.96948 | 0.970567 | +0.00109 |
+| best GBDT (XGB v5), Fable | 0.96948 | **0.970203** | +0.00072 |
+| best GBDT, GPT | 0.96941 | 0.969973 | +0.00056 |
+
+**Their Aug-24 starting point, 0.9694, is above our best single model ever measured
+(v19 lookup, 10 folds, 0.968908).** We finished below where their single-model week began.
+The leapfrog in that chart is visible and matches the writeup: Fable leads to Aug 26, GPT
+retakes Aug 28-29, right where Fable's findings were handed over.
+
+His process, in his words: *"they continually studied the single model and analyzed where it
+made mistakes and what types of patterns different features or model architectures could
+replicate and constantly added just what was needed to address every shortcoming."*
+Error forensics, then a targeted feature. **We never once analysed where v19 or v20 were
+wrong.** Our loop was idea-family → measure OOF → accept or reject, so a rejection taught us
+nothing about what to try next; his rejections came with a diagnosis.
+
+For scale, our best single (0.968908) was only 0.00017 behind Keanan's 7th-place best single
+(XGBoost, 0.969080). The 1st-place RealMLP at 0.97070 was +0.0018 clear of us — and above
+what the *entire public pool* reaches when stacked (~0.9701, measured independently by
+Exposed over ~155 public OOFs). First single model to win a Playground competition in 18
+months: private 0.97145, public 0.97174, ahead of 2nd place outright.
+
+### Miss 3 — pool breadth we identified and then declined to build
+
+Keanan (7th) assembled 556 verified prediction streams — 206 local, 350 public — and stacked
+them with six cross-fitted LogisticRegressions (C = 0.01…3), rank-normalised, ranks averaged.
+Level-2 no more sophisticated than ours; OOF **0.970879** against our 0.969680. The
+difference is pool size, not machinery.
+
+His marginal arithmetic is the part worth keeping: 50 individually *weak* public models added
+**+0.000060** to the blend where a random same-size control added +0.000013. C=0.01 was the
+weakest member alone, and removing it made the C-bag worse. *"Care about different errors
+more than solo scores."*
+
+Ravi (25th): 600+ features in a reusable feature store, 400+ candidate models, 15 folds,
+weak-but-diverse members kept deliberately.
+
+We reached this conclusion ourselves — `v25_lookup_multires`'s note says it "would likely
+help only inside a large redundant library stack" — and then did not build the library. That
+was a budget call, and it is the whole Miss 3.
+
+### Miss 4 — small measured levers we skipped
+
+| lever | whose | worth |
+|---|---|---|
+| negative-weight residual correctors (subtract 25% of a public-only stack, 10% of a Rank-Gauss stack) | 7th | +0.000029 |
+| rank-normalised LogReg C-bag as meta (6 C values, average ranks, re-rank) | 7th | small; ours was a single LogReg |
+| 15 folds | 25th | we measured 5→10 at +0.0002; 10→15 marginal |
+| two deliberately decorrelated final bets (public hedge at rank-corr 0.9967 vs strict-OOF primary) | 7th | his hedge won the slot — 0.97112 private vs his primary's 0.97095 |
+
+Together ~+0.00005 to 0.0001. Not the story; Miss 1 and Miss 2 are.
+
+### What the writeups confirm we got right
+
+- Exact-value target encoding as the top feature family — Keanan: *"the best feature idea"*,
+  and his 4→9 target-encoded columns were worth +0.00191 on XGBoost. We were already past
+  that point.
+- Frequency encoding, decimal/rounding artifacts — both writeups ran them.
+- Lookup transformer as the decorrelating member — in Keanan's own table at 0.968672; ours
+  measured 0.968908.
+- Honest nested level-2 (never let the fold you evaluate choose its own blend weights) —
+  Keanan's headline lesson, already our practice.
+- Trust CV over public LB; reject pseudo-labelling; reject concatenating the original
+  dataset — field consensus, and Naji jumped 98 private ranks on exactly that discipline.
+
+### The "honest ceiling" argument in this document was wrong
+
+Above, this file argues the 0.9711 band is unreachable by modelling, reasoning from "the
+best score reachable from published work is 0.97117". Exposed (322nd) measured the same
+public-pool ceiling and drew the same conclusion. Both wrong in the same way:
+**the ceiling of what the field has shared is not the ceiling of the problem.** One
+RealMLP went 0.0006 above the entire public pool stacked.
+
+Corollary worth carrying forward: when a leaderboard compresses into a 0.0002 band, that is
+evidence that everyone stopped in the same place — not evidence that the place is optimal.
+Exposed's own note, having run the same tooling we did: *"the difference wasn't the tool, it
+was that you pointed it at single-model iteration for a week while I spent the month
+blending a pool that had already converged."*
+
+### What this means for the agent, which is the actual product here
+
+The competition was won by an agent harness. `artifacts/posthoc/agents.png` is its
+architecture, and it is a **blackboard, not a swarm**: one central Shared Knowledge store,
+13 workers as spokes, no peer-to-peer link anywhere. Phase One's agent writes findings in;
+GPT 5.6 and Fable 5 read and write it bidirectionally and dispatch work out; six ChatGPT Pro
+sessions (driven *manually* — human tars a packet, uploads, downloads a ZIP two hours later)
+and six NVIDIA-hosted models (Nemotron 3 Ultra, DeepSeek V4 Pro, Kimi K3, Gemini 3.7 Flash,
+Opus 5, Qwen 3.8 27B) write back in. The store is the sole coordination primitive — the "50
+discovery.md files" of the comments, which agents are told to re-read.
+
+| his loop | ours |
+|---|---|
+| 4-12h unattended campaigns over ~10 days, agent submits to Kaggle itself | **45 min wall clock, one shot**, human submits |
+| discovery.md written after every campaign, re-read by every agent | `versions.yaml` + the skill's falsified table — single-writer, and one entry was wrong |
+| human steering at plateaus (one question opened the winning feature family) | prompt frozen at session start, no plateau checkpoint |
+| two agents competing, findings shared leader → trailer on a delay | one agent, no competitive pressure |
+| error-driven: study the model's mistakes, fix those | family-driven: test an idea, accept or reject |
+| 1M context, compaction never forced | auto-compact at ~170k |
+| 90 submissions | 8 |
+
+Every piece of that has a Databricks-native primitive already in this repo's map: shared
+knowledge → Lakebase or a Delta discovery table, workers → parallel Jobs runs, ledger →
+MLflow, self-submit → the Kaggle tool on a schedule. **What is missing is not
+infrastructure. It is multi-hour autonomy, plus a knowledge store that more than one writer
+can contradict.**
+
+Changes landed from this analysis:
+
+1. `agent/skills/kaggle-tabular-classification/playbook.md` — new Phase 1c (error forensics
+   before the next feature), missingness scope corrected across three sub-families, and the
+   falsified table now carries a **Scope** column so a narrow result can never again read as
+   a verdict on a category.
+2. `scripts/agent-prompt.txt` — the wrong missingness instruction replaced with the three
+   sub-tests, and the 45-minute budget line called out as the constraint it was.
+
+### Sources
+
+- [1st place — Chris Deotte](https://www.kaggle.com/competitions/playground-series-s6e8/writeups/1st-place-distributed-intelligence-nvidia-infe) (charts mirrored in `artifacts/posthoc/`)
+- [7th place — Keanan](https://www.kaggle.com/competitions/playground-series-s6e8/writeups/7th-place-many-models-one-simple-stack)
+- [Public 18 / Private 25 — Ravi Ramakrishnan](https://www.kaggle.com/competitions/playground-series-s6e8/writeups/public-18-private-25-approach)
+- Georgy Mamarin's missingness measurements and Talha Tursun's +0.0014 augmentation result,
+  both from the 1st-place writeup's comment thread.
 
 ## Reproducing
 

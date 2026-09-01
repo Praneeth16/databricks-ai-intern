@@ -32,7 +32,14 @@ TASK
    - imputed columns kept ALONGSIDE the NaN-bearing originals, never replacing them
    - composition/ratio features, including the accounting residual
      daily_screen_time_hours - (social_media_hours + gaming_hours + work_study_hours)
-   - do NOT add NaN-indicator features: missingness is MCAR and they measure -0.00001
+   - missingness: do NOT add NaN-indicator features or row-level NaN counts. That ONE
+     sub-family is measured dead here (-0.00001; count-of-missing scores AUC 0.5017
+     standalone). It does NOT retire missingness. The live sub-family is VALUE RECOVERY:
+     the identity daily >= social+gaming+work holds for 100% of rows, so run it backwards
+     and each MISSING driver gets an exact bound from the columns that remain. 46% of what
+     gaming_hours and work_study_hours contribute is that recovery. Build identity-derived
+     bounds per missing pattern and per-column imputation models, and ablate them. The
+     1st-place solution's best single model was a missing-value repair model.
 4. Train XGBoost, LightGBM, and CatBoost; then blend in LOGIT space with a
    LogisticRegression meta-learner, fitted so no row is scored by a combiner that saw
    its own OOF value. Keep predictions in float64.
@@ -63,7 +70,22 @@ CALIBRATION (so you know when to stop)
 - A hand-tuned LGBM with no feature work scores ~0.9632. That is the naive attempt.
 - A competent single model reaches ~0.9684 OOF, which maps to ~0.9698 public LB.
 - A 3-4 model logit stack reaches ~0.9697 OOF, roughly 0.9710 LB.
-- Public LB top is 0.97142, but above ~0.97110 the evidence says people are blending
-  each other's public submissions and overfitting a 59k-row split. Do not chase it.
 - The CV->LB offset on this competition is positive, +0.0011 to +0.0015: LB reads
   slightly higher than OOF because test predictions average five fold-models.
+- Public LB top is 0.97142. Above ~0.97110 many teams are blending each other's public
+  submissions against a 59k-row split, so do not chase THAT. But do not mistake it for a
+  ceiling either: the competition was won by a SINGLE model at CV 0.97070 / private
+  0.97145, about +0.0006 above what the entire public OOF pool reaches when stacked. A
+  strong single model was the highest-value object in this competition.
+- Honest reference point from the run this prompt produced: our ladder finished
+  458/3532 (private 0.97080 with borrowed predictions, 0.97022 on own models only),
+  0.00023 short of top-50. If your best single model is below ~0.9700 OOF, the gap is
+  your model, not the problem.
+
+BUDGET NOTE (read before you plan)
+The 45-minute budget above is a demo constraint, not a modelling one, and on the real
+competition it was the binding limit. The winning solution's first phase was a single
+agent left running unattended for FOUR DAYS with its own submit loop; it beat a
+45-minute run by more than any feature trick in this prompt. Inside 45 minutes: build the
+strongest single model you can and say plainly what you did not have time to test. Do not
+spend the budget on a wide-but-shallow ensemble.

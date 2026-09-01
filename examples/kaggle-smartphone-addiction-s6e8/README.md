@@ -11,10 +11,12 @@ Second worked example for `databricks-ai-intern`, and the reference layout for
 
 | | |
 |---|---|
+| **Final private LB** | **0.97080 — 458 / 3,532 teams** (variant B2, borrows other people's predictions) |
+| Private LB, own models only | 0.97022 (variant A) |
 | **Public LB, own models only** | **0.97052** |
 | Public LB with the public OOF library blended in | 0.97104 |
-| Rank at 0.97052 | ~460 / 1700 teams |
-| First pass stopped at | 0.96982 (~594th) |
+| Gap to private top-50 (0.97103) | **0.00023** |
+| First pass stopped at | 0.96982 (~594th public) |
 | Strongest *own-models* pipeline published on this competition | 0.97041 |
 | Naive first attempt | 0.96324 — hand-picked params, raw features |
 | LB top | 0.97142 (best score reachable from *published* work: 0.97117) |
@@ -24,6 +26,16 @@ Second worked example for `databricks-ai-intern`, and the reference layout for
 
 Full numbers, the killed hypotheses, and the honest-ceiling argument are in
 [`FINAL_RESULTS.md`](FINAL_RESULTS.md).
+
+> **Read the posthoc.** [`FINAL_RESULTS.md` § Posthoc](FINAL_RESULTS.md#posthoc--private-results-and-what-the-writeups-say-we-missed)
+> compares this ladder against the 1st/7th/25th-place writeups. Three things it establishes,
+> each measured: (1) we closed the missingness family after falsifying only its *pattern*
+> sub-family, and the winning single model is named `repair20` — missing-value
+> reconstruction, iteration 20; (2) the 1st-place **Phase One agent, alone and unattended for
+> four days with a self-submit loop, reached 0.97127 public** — past our borrowed 0.97104, so
+> the separator was autonomy duration, not the 13-worker swarm; (3) the honest-ceiling
+> argument in this example is wrong — one RealMLP at CV 0.97070 beat the entire public pool
+> stacked. Gap from us to private top-50 was 0.00023.
 
 **The second pass in one paragraph.** The first pass's four-GBM stack gained +0.00007 and its
 conclusion — that the members were too correlated — was right. What it got wrong was the

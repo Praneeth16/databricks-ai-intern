@@ -13,6 +13,25 @@ Addiction, IID with heavy missingness) — and they are strong priors, not guara
 there StratifiedKFold is correct. Where the two disagree, the disagreement itself is
 the lesson: verify the geometry on *this* data rather than inheriting a rule.
 
+> **Where the S6E8 campaign actually finished, and why this playbook was revised.**
+> 458 / 3,532 — private 0.97080, **0.00023 short of top-50**. Not a compute deficit. Three
+> process failures, each now a section here:
+> 1. It falsified missingness-as-*pattern* (−0.00001, correct) and retired the whole
+>    category. The 1st-place winner's best single model is `realmlp_repair20` — missing-value
+>    reconstruction, iteration 20 — worth ~4th place alone. → **Phase 1b-missing**.
+> 2. It generated feature ideas from priors, so three misses read as "features exhausted".
+>    The winning agents generated them from the model's own errors, gaining +0.0013 on a
+>    single model in six days. → **Phase 1c**.
+> 3. It declared an honest ceiling from the public pool's ceiling. One RealMLP at CV 0.97070
+>    beat that entire pool stacked. → **Know when the leaderboard stops being evidence**, and
+>    the wall checklist.
+>
+> And the finding that dwarfs all three: the winner's **Phase One was a single autonomous
+> agent, unattended for four days with a self-submit loop, and it reached 0.97127 public
+> before a second agent existed** — past what a 45-minute run reached with other people's
+> predictions blended in. Wall-clock autonomy beat both feature cleverness and worker count.
+> Full comparison: `examples/kaggle-smartphone-addiction-s6e8/FINAL_RESULTS.md` § Posthoc.
+
 ## Phase -1 — Pick CPU or GPU before submitting anything (cheap, always do it)
 
 Call `compute_advisor.recommend_compute(task_shape=..., model_family=..., n_rows=...,
@@ -146,9 +165,78 @@ already found before writing off a whole category.
 
 **Missing values: augment, never replace.** GBMs learn native NaN split directions;
 imputing drags rows toward the mean and loses information. Keep imputed columns
-*alongside* the originals (+0.0012 on S6E8). And test whether missingness carries signal
-before building features from it — on S6E8 it did not (NaN-indicator features measured
-−0.00001, MCAR), which I confirmed independently.
+*alongside* the originals (+0.0012 on S6E8).
+
+### Phase 1b-missing — missingness has THREE independent sub-families. Test all three.
+
+**This is where the S6E8 campaign lost its top-50 finish, so read the whole subsection.**
+We measured NaN-indicator features at −0.00001, concluded "missingness is MCAR, dead", and
+wrote that into this skill and the agent prompt. The 1st-place winner's answer to what broke
+his plateau: *"One new large source of signal was all the missing values."* His winning
+single model's filename is `realmlp_repair20` — missing-value **repair**, iteration 20 —
+and it scored ~4th place on its own. We falsified one sub-family and retired the category.
+
+The three sub-families are unrelated mechanisms. A null result on one says nothing about
+the others:
+
+1. **Pattern-as-predictor** — indicators, row-level NaN counts, missingness combinations.
+   *Genuinely dead on S6E8:* −0.00001 here; count-of-missing scores AUC 0.5017 standalone,
+   and the largest gap any single column opens between its missing and present rows is
+   0.0042 against a 0.709 base rate (Georgy Mamarin, measured independently). An adversarial
+   train/test probe at 0.566 sitting entirely in the missingness is safe to ignore.
+2. **Value recovery — the live one, and the one we skipped.** When the generator enforces an
+   arithmetic identity, a missing driver is partly *recoverable* from the columns that
+   remain. On S6E8 `daily ≥ social + gaming + work` holds for 100% of rows; we verified that
+   and then only used the residual as a feature on rows where everything was observed. Run it
+   backwards and each missing driver gets an exact bound from the others. Size of the effect:
+   **46% of what `gaming_hours` and `work_study_hours` add on top of the three screen columns
+   disappears once you keep only rows where both drivers are observed** — nearly half of that
+   apparent signal was recovery. Build: identity-derived bounds per missing pattern,
+   per-column "null-secondary" imputation models (25th place ran these), reconstruction
+   residuals.
+3. **Missingness-shaped augmentation on NN members** — mask inputs during training in the
+   *same shape* as real missingness. Measured **+0.0014 on a solo NN** (Talha Tursun),
+   shrinking to ~0 inside a large blend. So it is a single-model lever that pool-blending
+   campaigns systematically discard. Our one test (masking aug 0.25 on a lookup transformer,
+   −0.00014) was the wrong architecture and an arbitrary rate — it does not close this.
+
+**Rule.** Before recording any missingness verdict, name which of the three you tested.
+"Missingness doesn't help here" is not a finding a single ablation can support.
+
+## Phase 1c — Error forensics: derive the next feature from the model's mistakes
+
+**Do this before every feature block after Phase 1b.** It is the process difference between
+the S6E8 campaign that finished 458th and the one that won.
+
+Our loop was: pick an idea family → measure OOF → accept or reject. A rejection taught
+nothing about what to try next, so after three misses we concluded a category was exhausted.
+The 1st-place agents ran the other loop, in their operator's words: *"they continually
+studied the single model and analyzed where it made mistakes and what types of patterns
+different features or model architectures could replicate and constantly added just what was
+needed to address every shortcoming."* Their best single model gained **+0.0013 in six days
+in ~8-10 discrete steps** (each step one discovery landing), and their *starting* point was
+above our best single model's final score.
+
+Procedure, on OOF predictions of the current best single model:
+
+1. **Rank rows by loss.** For AUC, work with the misranked pairs: sample high-scoring
+   negatives and low-scoring positives.
+2. **Slice the worst decile** by each raw column's value bucket, by missing-pattern, by
+   every categorical level. Compare slice error rate against the global rate.
+3. **Name the top 3 slices and ask what representation would separate them.** A slice the
+   model cannot fix with more trees is telling you about a *representation* gap, not a
+   capacity gap — e.g. on S6E8 `notifications_per_day` has univariate AUC 0.492 (no monotone
+   signal at all) but its per-value residuals correlate 0.72 across independent halves, which
+   is what makes an exact-value embedding table the right answer and axis-aligned splits the
+   wrong one.
+4. **Build the one feature or member that addresses the top slice**, ablate it, and re-run
+   this phase. Not a batch of ten guesses.
+5. `experiment record` the slice diagnosis alongside the metric. The diagnosis is the part
+   that compounds; the metric alone does not.
+
+**Stop rule inversion.** "N feature ideas in a row measured as noise" is NOT a signal to stop
+engineering — it is a signal that you are generating ideas from priors instead of from this
+model's errors. Switch to this phase before concluding a category is dead.
 
 ## Phase 2 — Cross-entity / Race-context features (often highest lift)
 
@@ -289,16 +377,24 @@ References: [Deotte pseudo-labeling QDA 0.969](https://www.kaggle.com/code/cdeot
 Both comps are synthetic Playground tables. These were each measured, and each lost.
 If you think one applies anyway, say why *this* data differs before running it.
 
-| Idea | Measured result | Why it failed |
-|---|---|---|
-| NaN-indicator features | S6E8 −0.00001 | Missingness was MCAR; the pattern carries no signal |
-| Concatenating the original source dataset | S6E8 −0.0001 | Generator manufactured structure the original lacks: the accounting identity `daily ≥ social+gaming+work` holds for **all** 421k synthetic rows and is violated by 60.7% of original rows |
-| Pseudo-labelling confident test rows | S6E8 −0.0034 (worst single move); S6E5 −0.00027 | Circular on a high-AUC model — it learns to predict its own predictions, so val rises while LB falls |
-| Monte-Carlo marginalising over missing features | S6E8 0.95240 vs 0.96328 | Sampling from *marginals* discards feature correlations and injects noise |
-| Constrained mutual imputation between correlated columns | S6E8 0.96309 vs 0.96324 | The generator only partly preserved the constraint (~54% of comparable rows) |
-| Neural members (TabM / ResNet / MLP-PLR) | ≤ +0.00002 to a GBM stack | Below a ~0.966 solo-OOF cliff, contribution tracks solo strength, not decorrelation |
-| Rank-averaging a saturated ensemble | S6E8 −0.0027 vs logit stack | Ranks lose resolution when members correlate above 0.99 |
-| Richer feature sets on shift-heavy synthetic data | S6E5 −0.0041 (26 feats), −0.0029 (35 feats) | Over-engineering adds noise when the generator's signal is already exposed |
+**Read the Scope column before generalising.** Every row is a verdict on exactly what its
+scope says and nothing wider. This column exists because the S6E8 campaign recorded
+"NaN-indicator features: −0.00001, missingness is MCAR", read it later as *missingness is
+dead*, and lost a top-50 finish to a feature family the winner called his largest new source
+of signal. A narrow measurement written down without its scope becomes a false general law
+the next reader cannot audit.
+
+| Idea | Measured result | Scope — what this does NOT falsify | Why it failed |
+|---|---|---|---|
+| NaN-indicator features, row-level NaN counts | S6E8 −0.00001 / +0.00002 | **Only missingness-as-pattern.** Says nothing about value *recovery* through a generator identity, per-column imputation models, or missingness-shaped NN augmentation (+0.0014 solo NN). See Phase 1b-missing | The pattern of which cells are absent carries no signal on the label (MCAR); count-of-missing scores AUC 0.5017 standalone |
+| Concatenating the original source dataset | S6E8 −0.0001 | Only *this* generator's identity mismatch; check the identity before assuming it transfers | Generator manufactured structure the original lacks: `daily ≥ social+gaming+work` holds for **all** 421k synthetic rows, violated by 60.7% of original rows |
+| Pseudo-labelling confident test rows | S6E8 −0.0034 (worst single move); S6E5 −0.00027 | Only high-AUC models with test ≈ train; a genuine distribution shift is a different case | Circular — it learns to predict its own predictions, so val rises while LB falls |
+| Monte-Carlo marginalising over missing features | S6E8 0.95240 vs 0.96328 | Only *marginal* sampling. Joint/conditional reconstruction is untested and is the live sub-family | Sampling from marginals discards feature correlations and injects noise |
+| Constrained mutual imputation, `daily`↔`weekend` | S6E8 0.96309 vs 0.96324 | **Only that column pair.** The `daily ≥ social+gaming+work` identity holds on 100% of rows and was never run as recovery — do that one | The U(0.5,3) window only survives in ~54% of comparable synthetic rows |
+| Neural members (TabM / ResNet / MLP-PLR) as *diversity* | ≤ +0.00002 to a GBM stack | Only neural members *below* the strength cliff. A neural member AT GBDT strength is the highest-value member there is — S6E8's winning single model was a RealMLP at 0.97070, above the entire public pool stacked | Below a ~0.966 solo-OOF cliff, contribution tracks solo strength, not decorrelation |
+| Rank-averaging a saturated ensemble | S6E8 −0.0027 vs logit stack | Only plain rank-averaging. Rank-normalised inputs into a *fitted* LogReg C-bag reached 0.970879 for 7th place | Ranks lose resolution when members correlate above 0.99 |
+| Richer feature sets on shift-heavy synthetic data | S6E5 −0.0041 (26 feats), −0.0029 (35 feats) | Only S6E5's shift-heavy geometry — S6E8 rewarded 600+ engineered features (25th place) | Over-engineering adds noise when the generator's signal is already exposed |
+| 30-trial Optuna from published params | S6E8 0.966850 vs incumbent 0.966853 | Only when the incumbent was already a *published* config for this comp. From your own guesses, tuning was S6E5's biggest single win | Hyperparameters were already at the family's ceiling |
 
 **Blending strategy that did work (S6E8):** logit-space stack
 (`logit(p)` clipped to ±30) with a LogisticRegression meta-learner, fitted honestly so
@@ -313,6 +409,17 @@ people blending each other's submissions. A widely-upvoted analysis showed that 
 Season-6 episodes *zero* public top-10 teams survived into the private top-10. Optimising
 against a 59k-row public split is multiple-testing, not modelling.
 
+> **But do not turn that into a ceiling claim.** The S6E8 campaign went one step further and
+> argued the 0.9711 band was unreachable by honest modelling, reasoning from "the best score
+> reachable from published work is 0.97117". That was wrong, and it capped the campaign at
+> 458th. The 1st-place **single** model measured CV 0.97070 — roughly +0.0006 above what the
+> *entire* public pool of ~155 OOFs reaches when stacked (~0.9701, measured independently).
+> **The ceiling of what the field has shared is not the ceiling of the problem.** When a
+> leaderboard compresses into a 0.0002 band, that is evidence everyone stopped in the same
+> place, not evidence the place is optimal. Distinguish two claims and only ever make the
+> first: "the public *pool* has converged" (measurable, usually true) versus "the *problem*
+> has converged" (almost never demonstrable).
+
 ## When you've hit the wall
 
 If `experiment best` shows no variant beating the anchor by ≥ 0.001 over several
@@ -320,6 +427,34 @@ honest attempts, you may be at the honest ceiling for the model family (S6E5
 capped at 0.94924 after 9 failed attempts to beat it). Breaking it needs true
 model-class diversity (TabPFN/transformer) — not more features, seeds, or
 GBDT blends. Stop when marginal gain < compute cost and say so.
+
+**Before you declare a wall, run this checklist.** S6E8 declared one at 0.9705 and the
+winner was 0.0010 further up the same road:
+
+1. **Phase 1c error forensics on the best single model** — have you looked at *where* it is
+   wrong, or only at whether ideas cleared a threshold? If the latter, you have not hit a
+   wall, you have run out of priors.
+2. **All three missingness sub-families tested?** (Phase 1b-missing.) Recovery and NN
+   augmentation are the two usually skipped.
+3. **Is your best single model at the strength of the best *published* single model?** If it
+   is below, the wall is your model, not the problem. On S6E8 the winner's single model beat
+   the entire public pool stacked, so a strong single model was the highest-leverage object
+   in the competition and every "the pool has converged" argument was beside the point.
+4. **Ensemble breadth vs single-model strength — pick deliberately, and know the trade.** 7th
+   place stacked 556 verified streams to OOF 0.970879 (50 individually *weak* members were
+   worth +0.000060 against +0.000013 for a random control — "care about different errors more
+   than solo scores"). 1st place got 0.97070 from one model, and his 456-member ensemble
+   added only +0.00028 on top of it. Both routes reached the top; running a half-sized version
+   of each reaches neither.
+5. **How long has the loop actually run?** S6E8's 1st-place **Phase One was a single
+   autonomous agent, unattended for four days, submitting to Kaggle itself — it reached
+   0.97127 public before any second agent existed**, above what our 45-minute run reached
+   even with other people's predictions blended in. His 12 extra workers added +0.0008; the
+   lone agent had already added +0.0008. If your campaign is measured in minutes, wall-clock
+   is your binding constraint and nothing in this playbook will substitute for it.
+6. **Is your ledger single-writer?** His coordination primitive was one shared discovery store
+   that every agent wrote to and re-read. A ledger only one process ever writes is a ledger
+   whose wrong entries are never challenged — see the missingness entry that cost S6E8.
 
 ## Submission discipline (also in core system prompt)
 

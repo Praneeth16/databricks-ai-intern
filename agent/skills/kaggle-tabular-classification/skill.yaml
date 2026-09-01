@@ -1,13 +1,22 @@
 name: kaggle-tabular-classification
-version: 2.0.0
+version: 2.1.0
 summary: |
   Ranked playbook for Kaggle tabular binary/multiclass competitions where the
   metric is AUC, log-loss, or accuracy. Encodes measured lessons from two
   Playground comps that deliberately disagree: S6E5 (F1 Pit Stops, temporal —
-  time-holdout was the only valid proxy) and S6E8 (Smartphone Addiction, IID
-  with MCAR missingness — StratifiedKFold, target+frequency encoding was the
-  biggest feature win, CPU beats GPU for GBMs). Includes a table of
-  already-falsified ideas so compute is not spent re-deriving them.
+  time-holdout was the only valid proxy) and S6E8 (Smartphone Addiction, IID —
+  StratifiedKFold, target+frequency encoding was the biggest feature win, CPU
+  beats GPU for GBMs). Includes a table of already-falsified ideas, each with an
+  explicit SCOPE column, so compute is not spent re-deriving them AND a narrow
+  null result is never read as a verdict on a whole category.
+
+  v2.1 rewrites three things after the S6E8 private leaderboard and the winners'
+  writeups landed (that campaign finished 458/3532, 0.00023 short of top-50):
+  missingness is now three independent sub-families, only one of which was ever
+  falsified (the winner's best single model is a missing-value *repair* model);
+  a new Phase 1c derives the next feature from the current model's errors rather
+  than from priors; and the "honest ceiling" argument is corrected — the ceiling
+  of what the field has published is not the ceiling of the problem.
 
 triggers:
   # The agent searches its current task description and recent user turns for

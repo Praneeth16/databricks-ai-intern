@@ -399,17 +399,44 @@ versions:
 # Hypotheses deliberately NOT pursued, each with the reason. Recorded so the agent
 # (and the next person) does not spend compute re-deriving them.
 rejected:
-  - idea: NaN-indicator features
-    evidence: "measured -0.00001 here; missingness is MCAR"
+  # POSTHOC CORRECTION (2026-09-01, after the private LB and winners' writeups).
+  # Every entry below is a verdict on EXACTLY its own scope. Three of them were read
+  # during the campaign as verdicts on the whole missingness category, which is how a
+  # top-50 finish was lost by 0.00023: the 1st-place best single model is a missing-value
+  # repair model (realmlp_repair20, private 0.97145 alone). See FINAL_RESULTS.md § Posthoc.
+  # Missingness is three independent sub-families; only ONE of them is falsified here.
+  - idea: NaN-indicator features (missingness-as-pattern)
+    evidence: "measured -0.00001 here; the PATTERN of which cells are absent is MCAR w.r.t. the label (count-of-missing scores AUC 0.5017 standalone, max per-column gap 0.0042 vs a 0.709 base rate)"
+    scope: "ONLY pattern-as-predictor. Does NOT falsify value recovery via the accounting identity, per-column imputation models, or missingness-shaped NN augmentation (+0.0014 measured on a solo NN by Talha Tursun). NEVER TESTED HERE - this is the live family."
   - idea: Concatenating the original 7,500-row source dataset
     evidence: "-0.0001; the original violates the accounting identity 60.7% of the time, the synthetic never does"
   - idea: Pseudo-labelling confident test rows
     evidence: "-0.0034, the worst single move reported on this competition; matches the s6e5 finding that pseudo-labelling is circular on a high-AUC model"
   - idea: Monte-Carlo marginalisation over missing features
     evidence: "measured 0.95240 vs 0.96328; sampling from marginals discards feature correlations"
+    scope: "ONLY marginal sampling. Joint/conditional reconstruction is a different mechanism and was never run."
   - idea: Constrained mutual imputation of daily <-> weekend
     evidence: "measured 0.96309 vs 0.96324; the synthetic only preserves the U(0.5,3) window for ~54% of comparable rows"
-  - idea: Neural members (TabM / ResNet / MLP-PLR)
+    scope: "ONLY that column pair, whose window is soft. The daily >= social+gaming+work identity holds for 100% of rows and was NEVER run as recovery for missing drivers - Georgy Mamarin measured 46% of gaming_hours + work_study_hours' apparent contribution to be exactly that recovery."
+  - idea: Neural members (TabM / ResNet / MLP-PLR) as diversity
     evidence: "below the ~0.966 solo-OOF cliff, contribute <=0.00002 to a GBM stack already at 0.968+"
+    scope: "ONLY neural members below the strength cliff. A neural member AT GBDT strength is the single most valuable object here: the competition was won by a RealMLP at CV 0.97070, ~+0.0006 above the entire public OOF pool stacked."
   - idea: Blending other competitors' public submissions
     evidence: "would lift LB past 0.9711 but is not our own modelling; same call as s6e5"
+    scope: "Stands as a deliberate scoping choice, and it did work as expected (variant B2 private 0.97080 vs own-models 0.97022). What was WRONG was the companion claim that 0.9711 was therefore an honest ceiling - see FINAL_RESULTS.md § Posthoc."
+
+# Untested hypotheses that the posthoc identifies as live. Recorded so the next campaign
+# starts here rather than re-deriving the rejected list. None of these were measured.
+untested_live:
+  - idea: Identity-derived bounds for MISSING drivers
+    rationale: "daily >= social+gaming+work holds on 100% of rows (verified). Inverted, a missing driver is bounded exactly by the observed ones. We only ever used the residual on fully-observed rows. Sized externally at 46% of two columns' apparent contribution."
+  - idea: Per-column null-secondary imputation models
+    rationale: "25th place ran 'secondary models for null values across columns'. Distinct from the constant/marginal imputation we tested."
+  - idea: Missingness-shaped augmentation on a strong NN member
+    rationale: "+0.0014 measured on a solo NN externally, shrinking to ~0 inside large blends - a single-model lever that pool-blending campaigns discard. Our only test was masking aug 0.25 on the lookup transformer (-0.00014): wrong architecture, arbitrary rate."
+  - idea: Error-forensics-driven feature generation
+    rationale: "The winning agents gained +0.0013 on a single model in 6 days by repeatedly diagnosing where it was wrong. We never sliced v19/v20 errors even once."
+  - idea: Large redundant member library (200+ own streams)
+    rationale: "7th place: 556 streams -> OOF 0.970879; 50 individually weak members worth +0.000060 vs +0.000013 for a random control. v25's own note predicted this and we declined to build it."
+  - idea: Negative-weight residual correctors in the stack
+    rationale: "7th place: subtracting 25% of a public-only stack and 10% of a Rank-Gauss stack gained +0.000029."
